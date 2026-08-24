@@ -1,0 +1,3072 @@
+QWidget
+{
+    background-color:#f0f4f7;
+	border-color: #dae1ee;
+	color:#003986;
+	font-family:"Microsoft YaHei UI";
+}
+/*去掉焦点虚线框*/
+QWidget:focus
+{
+	outline:none;
+}
+
+QMenu
+{
+	background-color: #ffffff;
+	alternate-background-color: #f0f3f8;
+	border: 1px solid #a0b3c0;
+	font-size:14px;
+	font-family:"微软雅黑";
+	color: #002f86;
+	padding-top:0px;
+	padding-bottom:0px;
+}
+
+QMenu::item
+{
+	padding-right:28px;
+	padding-left:40px;
+	min-width:100px;
+	max-width:200px;
+	height:28px;
+}
+
+QMenu::separator
+{
+	height:1px;
+	background-color:#dbdbdb;
+}
+
+QMenu::icon
+{
+	position:absolute;
+	left:16px;
+	width:16px;
+	height:16px;
+}
+
+QMenu::item:selected:enabled
+{
+	background-color: rgb(255,196,93);
+	color: #002f86;
+}
+
+QMenu::item:selected:!enabled
+{
+	color:rgb(102,102,102);
+}
+
+QMenu::item:!enabled
+{
+	color:rgb(102,102,102);
+}
+
+QToolBar
+{
+	background-color:#001d43;
+}
+
+QToolBar::separator:vertical
+{
+	height:1px;
+	background-color:#232d2e;
+}
+
+QToolBar::separator:horizontal
+{
+	width:1px;
+	background-color:#232d2e;
+}
+
+QAbstractScrollArea
+{
+/* 	background-color: rgb(30, 30, 30); */
+}
+/* ==============================QLabel部分-开始======================================*/
+/*QLabel字体及颜色*/
+QLabel
+{
+	padding-bottom:3px;
+	/*font-family:"微软雅黑";*/
+	font-size:16px;
+	color:#002f86;
+	background: transparent;
+}
+/*禁用状态字体颜色*/
+QLabel:disabled
+{
+	color:#002f86;
+}
+/*链接样式*/
+QLabel#label_linktemplate
+{
+	font-size:12px;
+	color: #007acc;
+}
+QLabel#label_linktemplate:hover
+{
+	color: #30abfe;
+}
+/*配置对话框添加分组虚线*/
+QLabel#linelabel
+{
+	border-top:15px solid #373737;
+	background-image:url(theme/huaru/grayblue/hline.png);
+	background-repeat:repeat-x;
+}
+
+/* ==============================QLabel部分-结束=======================================*/
+QToolTip
+{
+	background-color: rgb(226, 236, 249);
+	color:#002f86;
+	border:1px solid rgb(226, 236, 249);
+}
+HRMessageBox,HRMessageBox *
+{
+	font-family:"微软雅黑";
+	font-size:13px;
+}
+
+/* ==============================QPushButton部分-开始===================================*/
+QPushButton
+{
+	background-color: rgba(223, 235, 250, 255);
+	color: rgba(0, 15, 44, 255);
+	
+	border-radius: 0px;
+	border:1px solid rgba(202, 219, 245, 255);
+	font: 14px;
+	width:72px;
+	min-height:24px;
+}
+QPushButton:hover
+{
+	background-color: #ffd98e;
+	color: #3b2600;
+	
+	border-radius: 0px;
+	border:1px solid #ecb017;
+	font: 14px;
+}
+QPushButton:pressed
+{
+	background-color: #ffd98e;
+	color: #3b2600;
+	
+	border-radius: 0px;
+	border:1px solid #ecb017;
+	font: 14px;
+}
+QPushButton:!enabled
+{
+	background-color: #f1f5f8;
+	color: #8c9097;
+	
+	border-radius: 0px;
+	border:1px solid #cacaca;
+	font: 14px;
+}
+
+/* ==============================QPushButton部分-结束====================================*/
+
+
+QToolButton
+{
+	background-color: #d5e5fa;
+	border:0px solid #97c1ff;
+	color:#002f86;
+}
+
+QToolButton:hover
+{
+	background-color: #e58900;
+	border:0px solid #ecb017;
+}
+
+
+/* ==============================QTableView部分-开始===================================*/
+/*默认状态*/
+/*（如果要想使交替行变色起作用就需要设置ui->tableWidget->setAlternatingRowColors(true)
+  或者在UI设计师界面勾选alternatingRowColors）；表格行与列的平分需要设置ui->tableWidget->horizontalHeader()->setResizeMode(QHeaderView::Stretch);
+	ui->tableWidget->verticalHeader()->setResizeMode(QHeaderView::Stretch);去除虚线框需要设置ui->tableWidget->setFocusPolicy(Qt::NoFocus);*/
+/*默认状态下表格属性，边框、背景色，字体及字体颜色、交替行变色*/
+QTableView
+{
+	font-size: 14px;
+	show-decoration-selected:1;
+	background-color: #ffffff;
+	alternate-background-color: #f0f3f8;
+	border: 1px solid #dee6ee;
+	color:#002f86;
+	selection-background-color: #ffd178;
+	gridline-color:#dee6ee;
+}
+
+ /*设置QTableView的表头颜色、表头字体大小，表头边框的隐藏*/
+QTableView>QHeaderView
+{
+	background-color: transparent;/*没有数据的列表头颜色与背景色一致*/
+}
+
+QTableView>QHeaderView::section
+{
+	border:1px solid #599ae8;
+	background-color: #e1effe;
+	color: #002f86;
+	
+	border-top: 1px #dee6f3;
+	border-left: 0px;
+	font: 13px;
+}
+/*设置行表头高度，背景颜色及边框设置*/
+QTableView>QHeaderView::section:horizontal
+{
+	font-size:16px;
+	height:28px;
+	border-right:1px solid #599ae8;
+	border-bottom:2px solid #68a3ea;
+}
+
+QTableView >QHeaderView::section:first 
+{
+	border-left: 0px solid #599ae8;
+}
+
+QTableView >QHeaderView::section:last 
+{
+	border-right: 0px solid #599ae8;
+}
+
+/*列表头宽度，边框及背景色设置*/
+QTableView>QHeaderView::section:vertical
+{
+	height:26px;
+}
+
+QTableView>QHeaderView::down-arrow 
+{
+	image: url(theme/huaru/skyblue/mainwidget_downarrow_normal.png);
+}
+
+QTableView>QHeaderView::up-arrow 
+{
+	image: url(theme/huaru/skyblue/mainwidget_uparrow_normal.png);
+}
+
+QTableView>QHeaderView::down-arrow:hover 
+{
+	image: url(theme/huaru/skyblue/mainwidget_downarrow_hover.png);
+}
+
+QTableView>QHeaderView::up-arrow:hover
+{
+	image: url(theme/huaru/skyblue/mainwidget_uparrow_hover.png);
+}
+
+/*QTableCornerButton背景及边框颜色设置，QTableCornerButton要想设置背景色必须要先给border设置属性，因为默认状态下它会吸引本地边框的背景颜色完全重叠*/
+QTableView QTableCornerButton::section
+{
+	border:1px solid #599ae8;
+	border-bottom:2px solid #599ae8;
+	border-right:0px solid #599ae8;
+	background-color: #e1effe;
+}
+/*设置表格focus状态下的背景颜色与选中时背景色一致，来去掉表格虚线框；配合 QWidget:focus，只写QWidget:focus对表格item不起作用*/
+
+QTableView::item
+{
+	height:28px;
+	color:#003986;
+	border:0px solid rgba(222, 230, 238, 255);
+	border-top:0px solid #dee6ee;
+	border-right:0px solid #dee6ee;
+	padding-left:6px;
+}
+
+ /*设置鼠标悬停时的状态,只能改变单元格颜色*/
+QTableView::item:!selected:hover
+{
+	background-color: #ffd178;
+	border-left: 0px solid transparent;
+	border-right: 0px solid transparent;
+}
+
+QTableView::item:selected,QTableView::branch:selected  
+{
+	background: #ffd178;
+	border-left: 0px solid transparent;
+	border-right: 0px solid transparent;
+}
+
+QTableView::item:!enabled
+{
+	height: 29px;
+	color:#a4a9b3;
+}
+
+/*Item未勾选状态，选框图片及背景图片*/
+QTableView::indicator:unchecked
+{
+	image: url(theme/huaru/whiteblue/checkbox_unchecked_normal.png);
+}
+/*Item勾选状态，选框图片及背景图片*/
+QTableView::indicator:checked 
+{
+	image: url(theme/huaru/whiteblue/checkbox_checked_normal.png);
+}
+ /*Item未勾选hover状态，选框图片*/
+QTableView::indicator:unchecked:hover
+{
+	image: url(theme/huaru/whiteblue/checkbox_unchecked_hover.png);
+}
+ /*Item勾选hover状态，选框图片及背景图片*/
+QTableView::indicator:checked:hover
+{
+    image: url(theme/huaru/whiteblue/checkbox_checked_hover.png);
+}
+ /*Item未勾选状态，选框图片*/
+QTableView::indicator:unchecked:disabled
+{
+	image: url(theme/huaru/whiteblue/checkbox_unchecked_disabled.png);
+}
+ /*Item勾选状态，选框图片及背景图片*/
+QTableView::indicator:checked:disabled
+{
+	image: url(theme/huaru/whiteblue/checkbox_checked_disabled.png);
+}
+ /*Item未勾选状态，选框图片*/
+QTableView::indicator:unchecked:selected
+{
+	image: url(theme/huaru/whiteblue/checkbox_unchecked_normal.png);
+}
+ /*Item勾选状态，选框图片及背景图片*/
+QTableView::indicator:checked:selected
+{
+	image: url(theme/huaru/whiteblue/checkbox_checked_normal.png);
+}
+
+QTableView>QHeaderView::down-arrow 
+{
+	image: url(theme/huaru/whiteblue/mainwidget_downarrow_normal.png);
+}
+
+QTableView>QHeaderView::up-arrow 
+{
+	image: url(theme/huaru/whiteblue/mainwidget_uparrow_normal.png);
+}
+
+QTableView>QHeaderView::down-arrow:hover 
+{
+	image: url(theme/huaru/whiteblue/mainwidget_downarrow_hover.png);
+}
+
+QTableView>QHeaderView::up-arrow:hover
+{
+	image: url(theme/huaru/whiteblue/mainwidget_uparrow_hover.png);
+}
+
+QTableView QComboBox
+{
+	border:0px solid #dee6ee;
+}
+
+QTableView QSpinBox
+{
+	border:0px solid #dee6ee;
+}
+/* ==============================QTableView部分-结束===================================*/
+
+/* ==============================QListView部分-开始===================================*/
+QListView
+{
+	font-size: 16px;
+	show-decoration-selected:1;
+	background-color: rgba(251,252,253,255); 
+	alternate-background-color: #f0f3f8;
+	border: 1px solid #dee6ee;
+	color:#002f86; 
+}
+
+QListView:disabled
+{
+	background-color:rgb(47,47, 47);
+	border: 1px solid #687069;
+} 
+
+QListView:!enabled
+{
+	background-color: transparent;
+	border: 1px solid #dee6ee;
+}
+
+QListView::item
+{
+	height:29px;
+	margin-top:1px;
+	padding-left:14px;
+	border: 0px solid #dee6ee;
+	/* border-bottom: 1px solid #dee6ee; */
+}
+
+QListView::item:!enabled
+{
+	height:29px;
+	color:#a4a9b3;
+	padding-left:1px;
+	border: 0px solid #dee6ee;
+	/* border-bottom: 1px solid #dee6ee; */
+} 
+
+QListView::item:hover
+{
+	background: #ffd178;
+	color:#002f86;
+	border: 1px solid #ffd178;
+	border-left: 0px solid transparent;
+	border-right: 0px solid transparent;
+}
+
+QListView::item:selected
+{
+	background-color: #ffc45d;
+	color:#002f86;
+	border: 1px solid #ffc45d;
+	border-left: 0px solid transparent;
+	border-right: 0px solid transparent;
+} 
+
+/*设置表格focus状态下的背景颜色与选中时背景色一致，来去掉表格虚线框；配合 QWidget:focus，只写QWidget:focus对表格item不起作用*/
+QListView::item:focus
+{
+	background-color: #ffc45d;
+}
+ /*设置鼠标悬停时的状态,只能改变单元格颜色*/
+QListView::item:!selected:hover
+{
+	background-color: #ffd178;
+}
+
+ /*Item未勾选状态，选框图片及背景图片*/
+QListView::indicator:unchecked
+{
+	image: url(theme/huaru/whiteblue/checkbox_unchecked_normal.png);
+}
+ /*Item勾选状态，选框图片及背景图片*/
+QListView::indicator:checked 
+{
+	image: url(theme/huaru/whiteblue/checkbox_checked_normal.png);
+}
+ /*Item未勾选hover状态，选框图片*/
+QListView::indicator:unchecked:hover
+{
+	image: url(theme/huaru/whiteblue/checkbox_unchecked_hover.png);
+}
+ /*Item勾选hover状态，选框图片及背景图片*/
+QListView::indicator:checked:hover
+{
+	image: url(theme/huaru/whiteblue/checkbox_checked_hover.png);
+}
+ /*Item未勾选状态，选框图片*/
+QListView::indicator:unchecked:disabled
+{
+	image: url(theme/huaru/whiteblue/checkbox_unchecked_disabled.png);
+}
+ /*Item勾选状态，选框图片及背景图片*/
+QListView::indicator:checked:disabled
+{
+	image: url(theme/huaru/whiteblue/checkbox_checked_disabled.png);
+}
+/* ==============================QListView部分-结束===================================*/
+
+/* ==============================QComboBox部分-开始===================================*/
+/*QComboBox通用部分：主要出现在弹出窗体中*/
+/*可用状态，设置高度、背景色、文字颜色、无边框*/
+QComboBox
+{
+	background-color: #fbfdff;
+	border:1px solid #a3b4cb;
+	min-height:26px;
+	padding-left:3px;
+	font-size: 14px;
+	font-family:"微软雅黑";
+	color:#56667f;
+}
+/*禁用状态，设置背景色*/
+QComboBox:disabled
+{
+	border:1px solid #e1e6e8;
+	background-color:rgba(241, 243, 245, 127);
+}
+QComboBox:focus
+{
+	border:1px solid #1f84ff;
+	background-color:#ffffff;
+}
+
+QComboBox::hover
+{
+	border:1px solid #1f84ff;
+	background-color:#ffffff;
+}
+
+/*点击组合框文字部分，下拉菜单出现时，组合框边框变色*/
+QComboBox:!editable:on
+{
+	border:1px solid #1f84ff;
+	border-bottom:2px;
+}
+/*下拉箭头为图片*/
+QComboBox::drop-down
+{
+	padding-top:5px;
+	padding-right:5px;
+    image:url(theme/huaru/whiteblue/icons/下拉按钮--正常.png);
+}
+/*点击下拉箭头，下拉菜单出现时，箭头无边框*/
+QComboBox::drop-down:!editable:pressed
+{
+	
+}
+/*鼠标经过状态下拉箭头图片*/
+QComboBox::drop-down:hover
+{
+	padding-top:5px;
+	padding-right:5px;
+	image:url(theme/huaru/whiteblue/icons/下拉按钮--滑过.png);
+}
+
+/*禁用状态下拉箭头图片*/
+QComboBox::drop-down:disabled
+{
+	padding-top:5px;
+	padding-right:5px;
+	image:url(theme/huaru/whiteblue/icons/下拉按钮--禁用.png);
+}
+/*主窗体上的ComboBox的样式，“#comboBox_Column”表示一个指定的对象，“#”后名称的需要根据实际修改*/
+/*可用状态，边框为图片*/
+QComboBox#comboBox_Column
+{
+	height:21px;
+	width:96px;	
+	border-width:2px 1px 1px 2px;
+	border-image: url(theme/huaru/whiteblue/mainwidget_pushbutton_normal.png) 2 1 1 2 repeat repeat; 
+	color: #f3f7fc;
+}
+
+/*点击组合框文字部分，下拉菜单出现时，组合框边框为图片*/
+QComboBox#comboBox_Column:!editable:on
+{
+	border-width:1px 1px 1px 1px;
+	border-image: url(theme/huaru/whiteblue/mainwidget_combobox_hover.png) 2 1 1 2 repeat repeat; 
+}
+/*点击下拉箭头，下拉菜单出现时，箭头无边框*/
+QComboBox#comboBox_Column::drop-down:!editable:pressed
+{
+	border:0;
+}
+
+QComboBox QAbstractItemView
+{
+	background-color:#ffffff;
+	color:#243c59; 
+}
+
+QComboBox QAbstractItemView::item
+{
+	min-height:21px;
+	border:0px solid;
+}
+
+QComboBox QAbstractItemView::item:selected
+{
+	background:rgb(51,153,255);
+	border:0px solid;
+}
+
+
+
+/* ==============================QComboBox部分-结束===================================*/
+
+/* ==============================QScrollBar部分-开始===================================*/
+ /*滚动条：滑块默认颜色和鼠标悬浮时颜色*/
+QScrollBar::handle 
+{
+	background:rgba(131, 160, 180, 70);
+	min-height:15px;
+	min-width:8px;
+	width:4px;
+	border-radius:0px;
+	
+	margin-top:3px;
+	margin-left:3px;
+	margin-right:3px;
+	margin-bottom:3px;
+}
+
+QScrollBar::handle:hover
+{
+	background:#a2b9d4;
+	width:4px;
+	border-radius:0px;
+}
+
+/*垂直滚动条：添加上下箭头，设置背景及滑块属性，主要出现在弹出窗体中*/
+
+
+QScrollBar:vertical
+{
+	border: 0px solid transparent;
+	background:rgba(255, 255, 255, 100);
+	width: 16px;
+}
+QScrollBar::add-line:vertical 
+{
+	image:url();
+	border: 0px;
+	height: 0px;
+}
+
+QScrollBar::sub-line:vertical 
+{
+	image:url();
+	border: 0px;
+	height: 0px;
+} 
+
+QScrollBar::add-line:vertical:hover 
+{
+	image:url();
+	border: 0px;
+	height: 0px;
+}
+
+QScrollBar::sub-line:vertical:hover
+{
+	image:url();
+	border: 0px;
+	height: 0px;
+}
+ /*水平滚动条：隐藏左右箭头，设置背景、滑块风格*/ 
+QScrollBar:horizontal 
+{
+	border: 0px solid transparent;
+	background:rgba(255, 255, 255, 100);
+	height: 16px;
+}
+
+QScrollBar::add-line:horizontal 
+{
+	image:url();
+	border: 0px;
+	height: 0px;
+}
+QScrollBar::sub-line:horizontal
+{
+	subcontrol-position: left;
+	image:url();
+	border: 0px;
+	height: 0px;
+}
+
+QScrollBar::add-line:horizontal:hover 
+{
+	image:url();
+	border: 0px;
+	height: 0px;
+}
+
+QScrollBar::sub-line:horizontal:hover
+{
+	image:url();
+	border: 0px;
+	height: 0px;
+}
+
+QScrollArea
+{
+	border: 0 solid #ecf4f9;
+}
+/* ==============================QScrollBar部分-结束===================================*/
+
+
+/* ==============================QTabWidget部分-开始===================================*/
+/*左间距26=widget的左16+tab的左padding10*/  
+QTabWidget::tab-bar 
+{
+	left: 0px;
+}
+
+QTabWidget
+{
+	font-family:"微软雅黑";
+	font: 14px;
+	background-color: transparent;
+}
+
+QTabWidget::pane
+{
+	border:0px solid #adb2b9;;
+}
+
+/* QTabBar::tab 
+{
+	color: #003986;
+	background: #e6ecf7;
+	border-width: 1px;
+	border-top: 1px solid #dae1ee;
+	border-bottom: 2px solid #68a3ea; 
+} 
+
+QTabBar::tab:selected 
+{
+	font-size:14px; 
+	color: #ffffff; 
+	background: #1e6ccc;
+	border-bottom:1px solid #68a3ea;
+}
+
+QTabBar::tab:!selected
+{
+	font-size:14px;
+	color: #003986; 
+	background: #e1effe;
+	border-bottom:1px solid #68a3ea;
+} */
+
+QTabWidget#CompTabWidget::tab-bar,QTabWidget#AssetTabWidget::tab-bar 
+{
+	 left: 0px; 
+}
+
+/* QTabWidget#tabWidget::tab-bar
+{
+	color: #ffffff;
+	background: rgb(245,168,0);
+	border-bottom:2px solid rgb(255,198,0);
+} */
+
+/* ==============================QTabWidget部分-结束===================================*/
+
+/* ==============================QGroupBox部分-开始=====================================*/
+
+QGroupBox
+{
+	border-radius: 0px;
+	font-size: 16px;
+	border:1px solid #b5c5d5;
+	background-color: #ffffff;
+	border-top:28px solid #dfe5ef;
+}
+
+QGroupBox::title
+{
+	font-size: 16px;
+	color: #002f86;
+	subcontrol-origin: margin;
+	subcontrol-position: top left;
+	left:10px;
+	top:5px;
+	background-color: transparent;
+}
+
+/*QGroupBox未勾选状态，选框图片及背景图片*/
+QGroupBox#HRCheckableGroupBox::indicator:unchecked
+{
+	image: url(theme/huaru/whiteblue/checkable_groupbox_uncheck.png);
+}
+ /*QGroupBox勾选状态，选框图片及背景图片*/
+QGroupBox#HRCheckableGroupBox::indicator:checked 
+{
+	image: url(theme/huaru/whiteblue/checkable_groupbox_check.png);
+}
+
+/*QGroupBox未勾选状态，选框图片及背景图片*/
+QGroupBox::indicator:unchecked
+{
+	image: url(theme/huaru/whiteblue/checkbox_unchecked_normal.png);
+}
+ /*QGroupBox勾选状态，选框图片及背景图片*/
+QGroupBox::indicator:checked 
+{
+	image: url(theme/huaru/whiteblue/checkbox_checked_normal.png);
+}
+ /*QGroupBox未勾选hover状态，选框图片*/
+QGroupBox::indicator:unchecked:hover
+{
+	image: url(theme/huaru/whiteblue/checkbox_unchecked_hover.png);
+}
+/*QGroupBox勾选hover状态，选框图片及背景图片*/
+QGroupBox::indicator:checked:hover
+{
+	image: url(theme/huaru/whiteblue/checkbox_checked_hover.png);
+}
+ /*QGroupBox未勾选状态，选框图片*/
+QGroupBox::indicator:unchecked:disabled
+{
+	image: url(theme/huaru/whiteblue/checkbox_unchecked_disabled.png);
+}
+/*QGroupBox勾选状态，选框图片及背景图片*/
+QGroupBox::indicator:checked:disabled
+{
+	image: url(theme/huaru/whiteblue/checkbox_checked_disabled.png);
+}
+/* ==============================QGroupBox部分-结束=====================================*/
+
+/* ==============================QRadioButton部分-开始===================================*/
+
+QRadioButton
+{
+	font-family:"微软雅黑";
+	font-size: 14px;
+	color:#002f86;
+	border:0px;
+	background-color: rgba(0,0,0,0);
+}
+
+QRadioButton:hover
+{
+	color:#788191;
+}
+
+QRadioButton:!enabled
+{
+	color:#657388;
+}
+
+QRadioButton:enabled
+{
+	color:#002f86;
+}
+
+QRadioButton::indicator::unchecked
+{
+	image: url(theme/huaru/whiteblue/radiobutton_unselected_normal.png);
+}
+
+QRadioButton::indicator::checked
+{
+	image: url(theme/huaru/whiteblue/radiobutton_selected_normal.png);
+}
+QRadioButton::indicator::unchecked:hover
+{
+	image: url(theme/huaru/whiteblue/radiobutton_unselected_hover.png);
+}
+
+QRadioButton::indicator::checked:hover
+{
+	image: url(theme/huaru/whiteblue/radiobutton_selected_hover.png);
+}
+QRadioButton::indicator::unchecked:disabled
+{
+	image: url(theme/huaru/whiteblue/radiobutton_unselected_disabled.png);
+}
+
+QRadioButton::indicator::checked:disabled
+{
+	image: url(theme/huaru/whiteblue/radiobutton_selected_disabled.png);
+}
+/* ==============================QRadioButton部分-结束===================================*/
+
+
+/* ==============================QSpinBox部分-开始======================================*/
+QSpinBox,QDoubleSpinBox,QDateTimeEdit,QLineEdit,QTextEdit
+{
+	background-color: #fbfdff;
+	border:1px solid #a3b4cb;
+	min-height:20px;
+	padding-left:3px;
+	font-family:"微软雅黑";
+	font-size: 14px;
+	color:#657388;
+}
+
+QSpinBox:disabled,QDoubleSpinBox:disabled,QDateTimeEdit:disabled,QLineEdit:disabled
+{
+	background-color: #eaf0f7;
+	border:1px solid #b5c5d5;
+	color:#bfc5cd;
+}
+
+QSpinBox::focus, QDoubleSpinBox::focus, QDateTimeEdit::focus,QLineEdit:focus, QTextEdit:focus,
+QSpinBox:hover, QDoubleSpinBox:hover, QDateTimeEdit:hover,QLineEdit:hover, QTextEdit:hover
+{
+	border:1px solid #1f84ff;
+	background-color:#ffffff;
+}
+
+QSpinBox::up-button , QDoubleSpinBox::up-button , QDateTimeEdit::up-button
+{
+	height:8px;
+	margin-top:3px;
+	subcontrol-origin: border;
+	subcontrol-position: top right; /* position at the top right corner */
+	image: url(theme/huaru/whiteblue/spinbox_uparrow_normal.png);
+}
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover, QDateTimeEdit::up-button:hover
+{
+	image: url(theme/huaru/whiteblue/spinbox_uparrow_hover.png);
+}
+
+QSpinBox::up-button:disabled, QSpinBox::up-button:off , QDoubleSpinBox::up-button:disabled, QDoubleSpinBox::up-button:off, QDateTimeEdit::up-button:disabled, QDateTimeEdit::up-button:off
+{
+	subcontrol-position: top right; /* position at the top right corner */
+	image: url(theme/huaru/whiteblue/spinbox_uparrow_disabled.png);
+}
+
+QSpinBox::down-button , QDoubleSpinBox::down-button  , QDateTimeEdit::down-button
+{
+	height:8px;
+	subcontrol-origin: border;
+	margin-bottom:3px;
+	subcontrol-position: bottom right; /* position at bottom right corner */
+	image: url(theme/huaru/whiteblue/spinbox_downarrow_normal.png);
+}
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover, QDateTimeEdit::down-button:hover
+{
+	image: url(theme/huaru/whiteblue/spinbox_downarrow_hover.png);
+}
+QSpinBox::down-button:disabled, QSpinBox::down-button:off , QDoubleSpinBox::down-button:disabled, QDoubleSpinBox::down-button:off , QDateTimeEdit::down-button:disabled, QDateTimeEdit::down-button:off
+{
+	subcontrol-position: bottom right; /* position at the top right corner */
+	image: url(theme/huaru/whiteblue/spinbox_downarrow_disabled.png);
+}
+/* ==============================QSpinBox部分-结束===================================*/
+
+/* ===============================QDateEdit部分-开始===================================*/
+/*禁用状态，设置背景色*/
+/* QDateEdit:disabled
+{
+	background-color:rgb(47,47,47);
+	border:0;
+}*/
+/*点击组合框文字部分，下拉菜单出现时，组合框边框变色*/
+QDateEdit:!editable:on
+{
+	border:1px solid #1b5982;
+}
+/*下拉箭头为图片*/
+QDateEdit::drop-down
+{
+	image:url(theme/huaru/whiteblue/dateedit_downarrow_normal.png);
+}
+/*点击下拉箭头，下拉菜单出现时，箭头无边框*/
+QDateEdit::drop-down:!editable:pressed
+{
+	border:0;
+}
+/*鼠标经过状态下拉箭头图片*/
+QDateEdit::drop-down:hover
+{
+	image:url(theme/huaru/whiteblue/dateedit_downarrow_hover.png);
+}
+
+/*禁用状态下拉箭头图片*/
+QDateEdit::drop-down:disabled
+{
+	image:url(theme/huaru/whiteblue/dateedit_downarrow_disabled.png);
+}
+/* ===============================QDateEdit部分-结束===================================*/
+
+ /* ==============================QCheckBox-开始======================================*/
+ /*QCheckBox未勾选状态，选框图片*/
+QCheckBox::indicator:unchecked
+{
+	image: url(theme/huaru/whiteblue/checkbox_unchecked_normal.png);
+}
+ /*QCheckBox勾选状态，选框图片及背景图片*/
+QCheckBox::indicator:checked 
+{
+	image: url(theme/huaru/whiteblue/checkbox_checked_normal.png);
+}
+ /*QCheckBox未勾选hover状态，选框图片*/
+ QCheckBox::indicator:unchecked:hover
+{
+	image: url(theme/huaru/whiteblue/checkbox_unchecked_hover.png);
+}
+ /*QCheckBox勾选hover状态，选框图片及背景图片*/
+QCheckBox::indicator:checked:hover
+{
+	image: url(theme/huaru/whiteblue/checkbox_checked_hover.png);
+}
+ /*QCheckBox未勾选状态，选框图片*/
+QCheckBox::indicator:unchecked:disabled
+{
+	image: url(theme/huaru/whiteblue/checkbox_unchecked_disabled.png);
+}
+ /*QCheckBox勾选状态，选框图片及背景图片*/
+QCheckBox::indicator:checked:disabled
+{
+	image: url(theme/huaru/whiteblue/checkbox_checked_disabled.png);
+}
+/*部分选中*/
+ QCheckBox::indicator:indeterminate
+{
+	image: url(theme/huaru/whiteblue/checkbox_partiallychecked_normal.png);
+}
+ QCheckBox::indicator:indeterminate:hover
+{
+	image: url(theme/huaru/whiteblue/checkbox_partiallychecked_hover.png);
+}
+QCheckBox::indicator:indeterminate:disabled
+{
+	image: url(theme/huaru/whiteblue/checkbox_partiallychecked_disabled.png);
+}
+
+QCheckBox
+{
+	font-family:"微软雅黑";
+	font-size: 14px;
+	color:#002f86;
+	background-color:transparent;
+}
+/*鼠标经过，字体颜色*/
+QCheckBox:hover
+{
+	color:#002f86;
+}
+/*禁用状态下，字体颜色*/
+QCheckBox:disabled
+{
+	color:#657388;
+}
+
+/* ==============================QCheckBox-结束======================================*/
+
+/* QMainWindow
+{
+	background-color: rgb(37,37,37);
+} */
+
+/* ==============================QDockWidget-开始===================================*/
+QDockWidget
+{
+	font-family:"微软雅黑";
+	border: 2px solid #687069;
+	font-size:18px;
+	color:#b5c4c8;
+	titlebar-close-icon: url(theme/huaru/whiteblue/dock_titlebarcloseicon.png);
+	titlebar-normal-icon: url(theme/huaru/whiteblue/dock_titlebarnormalicon.png);
+}
+
+QDockWidget::title
+{
+	text-align: left; 
+	background: #006fe0;
+	width:354px;
+	border-top: 1px solid #5f6f77;
+	border-bottom: 1px solid #5f6f77;
+	padding-top:7px;
+	padding-bottom:6px;
+	padding-left: 10px; 
+}
+
+/* ==============================QDockWidget-结束===================================*/
+
+/* ==============================QTreeView-开始-同QTreeWidget==================================*/
+/*所有树：文字大小为16*/
+QTreeView
+{
+	font-size:16px;
+	show-decoration-selected:1;
+	background-color:#ffffff;
+	alternate-background-color:#f0f3f8;;
+	color:#002f86;
+	border: 1px solid #dee6ee;
+}
+
+/*所有树：条目列高为27*/
+QTreeView::item
+{
+	height:29px;
+	color:#002f86;
+}
+
+QTreeView::item:!enabled
+{
+	height: 29px;
+	color:#a4a9b3;
+}
+
+QTreeView::branch
+{
+	background-color:transparent;
+}
+
+/* dockWidget中的树：鼠标悬浮于条目上时，该条目背景颜色变为灰色 */
+QTreeView::item:hover,QTreeView::branch:hover
+{
+	background: #fff3dd;
+	border: 1px solid #fff3dd;
+	border-left: 0px solid transparent;
+	border-right: 0px solid transparent;
+}
+
+/*所有树：条目被选中时背景颜色变为浅蓝,文字颜色*/
+QTreeView::item:selected,QTreeView::branch:selected  
+{
+	background: #ffc45d;
+	border: 1px solid #ffc45d;
+
+	border-left: 0px solid transparent;
+	border-right: 0px solid transparent;
+}
+
+QTreeView::branch:closed:has-children:!has-siblings,
+QTreeView::branch:closed:has-children:has-siblings
+{
+	image: url(theme/huaru/whiteblue/treewidget_close.png);
+	image-position:right;
+}
+
+QTreeView::branch:open:has-children:!has-siblings,
+QTreeView::branch:open:has-children:has-siblings
+{
+	image: url(theme/huaru/whiteblue/treewidget_open.png);
+	image-position:right;
+}
+QTreeView>QHeaderView::down-arrow 
+{
+	image: url(theme/huaru/whiteblue/icons/下拉按钮--正常.png);
+}
+
+QTreeView>QHeaderView::up-arrow 
+{
+	image: url(theme/huaru/whiteblue/icons/向上箭头--正常.png);
+}
+
+QTreeView>QHeaderView::down-arrow:hover 
+{
+	image: url(theme/huaru/whiteblue/icons/下拉按钮--滑过.png);
+}
+
+QTreeView>QHeaderView::up-arrow:hover
+{
+	image: url(theme/huaru/whiteblue/icons/向上箭头--滑过.png);
+}
+
+QTreeView>QHeaderView::section 
+{
+	font-family:"微软雅黑";
+	font-size: 16px;
+	background-color: #e1effe;
+	padding-left: 9px;
+	padding-right: 9px;
+	border: 1px solid #599ae8;
+	border-bottom: 2px solid #68a3ea;
+	border-top: 1px #dee6f3;
+	border-left: 1px #68a3ea;
+	height:28px;
+	width:30px;
+}
+QTreeView >QHeaderView::section:first 
+{
+	border-left: 0px solid #599ae8;
+}
+
+QTreeView >QHeaderView::section:last 
+{
+	border-right: 0px solid #599ae8;
+}
+
+/*Item未勾选状态，选框图片及背景图片*/
+QTreeView::indicator:unchecked
+{
+	image: url(theme/huaru/whiteblue/checkbox_unchecked_normal.png);
+}
+/*Item勾选状态，选框图片及背景图片*/
+QTreeView::indicator:checked 
+{
+	image: url(theme/huaru/whiteblue/checkbox_checked_normal.png);
+}
+/*Item未勾选hover状态，选框图片*/
+QTreeView::indicator:unchecked:hover
+{
+	image: url(theme/huaru/whiteblue/checkbox_unchecked_hover.png);
+}
+/*Item勾选hover状态，选框图片及背景图片*/
+QTreeView::indicator:checked:hover
+{
+	image: url(theme/huaru/whiteblue/checkbox_checked_hover.png);
+}
+
+/*Item未勾选状态，选框图片*/
+QTreeView::indicator:unchecked:disabled
+{
+	image: url(theme/huaru/whiteblue/checkbox_unchecked_disabled.png);
+}
+
+/*Item勾选状态，选框图片及背景图片*/
+QTreeView::indicator:checked:disabled
+{
+	image: url(theme/huaru/whiteblue/checkbox_checked_disabled.png);
+}
+
+/*实现条目打开和关闭时左边箭头变换显示效果*/
+
+QTreeView::branch:closed:has-children:!has-siblings,
+QTreeView::branch:closed:has-children:has-siblings
+{
+	image: url(theme/huaru/whiteblue/treewidget_close.png) ;
+	image-position:right;/*图片右对齐，以留出左侧空间*/
+}
+
+QTreeView::branch:open:has-children:!has-siblings,
+QTreeView::branch:open:has-children:has-siblings  
+{
+	image: url(theme/huaru/whiteblue/treewidget_open.png) ;
+	image-position:right;
+}
+
+/* ==============================QTreeView-结束-同QTreeWidget==================================*/
+
+/*==============================QTreeView需要交替色的开始==============================================*/
+
+HRSimResourceManagerWidget QTreeView#treeView_Resource
+{
+	background-color: #ffffff;
+	alternate-background-color: #f0f3f8;
+}
+
+/*==============================QTreeView需要交替色的结束==============================================*/
+
+QWidget#qt_calendar_navigationbar *,QWidget#qt_calendar_navigationbar
+{
+	background-color:#f6fbfe;
+}
+
+QCalendarView#qt_calendar_calendarview
+{
+	background-color:#f6fbfe;
+	border:0px solid #444c4c;
+}
+
+QCalendarView#qt_calendar_calendarview>QHeaderView::section:horizontal
+{
+	background-color:#f6fbfe;
+}
+
+TSSelectListWidget
+{
+	background-color: rgb(30,30,30);
+}
+
+QTextEdit
+{
+	padding-left:3px;
+	background-color:rgba(251, 253, 255, 127);
+	border:1px solid #a3b4cb;
+	font-size:12px;
+	font-family:"微软雅黑";
+	color:#657388;
+}
+
+/*点击QLineEdit出现输入焦点时，边框变色*/
+/*QTextEdit:focus
+{
+	border:1px solid #ec9a00;
+	color:#243c59;
+}
+
+QTextEdit:disabled
+{
+	border:1px solid #e1e6e8;
+	background-color:rgba(241, 243, 245, 127);
+}*/
+
+/* ==============================QSlider-开始=================================*/
+
+QSlider::handle:horizontal
+{
+	background-color:#bed5ee;
+	width: 8px;
+	border-radius:4px;
+	margin:-5px 0;
+}
+
+QSlider::groove:horizontal
+{
+	background-color:#7c9bb4;
+	height:4px;
+}
+
+
+/*滑动条设置*/
+QSlider
+{
+	background-color:transparent;
+}
+
+/*进度条*/
+QSlider::groove:horizontal
+{
+	border-radius:3px;
+	height:6px;
+}
+/*滑动块设置水平*/
+QSlider::handle:horizontal
+{
+	border:0px;
+	height: 16px;
+	width:16px;
+	background:transparent;
+	image:url(theme/huaru/whiteblue/XScenario/进度控制/移动按钮.png);
+}
+/*滑过水平*/
+QSlider::sub-page:horizontal
+{
+	border-radius:3px;
+	background-color: qlineargradient(spread:pad, x1:1, y1:0.75, x2:1, y2:0, stop:0 #0270c7, stop:1 #008df9);
+}
+/*为滑过水平*/
+QSlider::add-page:horizontal
+{
+	border-radius:3px;
+	background-color: qlineargradient(spread:pad, x1:1, y1:0.75, x2:1, y2:0, stop:0 #96abc4, stop:1 #9ab1cd);
+}
+/*滑动块设置竖直*/
+QSlider::handle:vertical
+{
+	border:0px;
+	height: 16px;
+	width:16px;
+	background:transparent;
+	image:url(theme/huaru/whiteblue/XScenario/进度控制/移动按钮.png);
+}
+/*滑过竖直*/
+QSlider::sub-page:vertical
+{
+	border-radius:3px;
+	background-color: qlineargradient(spread:pad, x1:0.478591, y1:0, x2:1, y2:0, stop:0 #0270c7, stop:1 #008df9);
+}
+/*为滑过竖直*/
+QSlider::add-page:vertical
+{
+	border-radius:3px;
+	background-color: qlineargradient(spread:pad, x1:0.478591, y1:0, x2:1, y2:0, stop:0 #96abc4, stop:1 #9ab1cd);
+}
+/* ==============================QSlider-结束=================================*/
+
+/* ==============================QToolButton特化-开始=================================*/
+QToolButton#pushButton_Save,
+QToolButton#AddButton
+{
+	min-height:4px;
+	height:21px;
+	padding-left:10px;
+	padding-right:10px;
+	background-color: #585858;
+	font-size:12px;
+	font-family:"Microsoft YaHei UI";
+	color: rgb(209,209,209);
+}
+/*按钮默认正常*/
+QToolButton#pushButton_Save,
+QToolButton#AddButton,
+QToolButton#MotionButton,
+QToolButton#DPButton
+{
+	border-width:2px 1px 1px 2px;
+	border-image: url(theme/huaru/whiteblue/popupwidget_pushbutton_normal.png) 2 1 1 2 repeat repeat; 
+}
+/*鼠标经过QToolButton，文字变色*//*按钮默认选中*/
+QToolButton#pushButton_Save:hover,
+QToolButton#AddButton:hover,
+QToolButton#MotionButton:hover,
+QToolButton#DPButton:hover
+{
+	color: rgb(255,255,255);
+	border-width:2px 1px 1px 2px;
+	border-image: url(theme/huaru/whiteblue/popupwidget_pushbutton_hover.png) 2 1 1 2 repeat repeat; 
+}
+
+/*鼠标点击QToolButton，文字变色*//*按钮默认选中*/
+QToolButton#pushButton_Save:pressed,
+QToolButton#AddButton:pressed,
+QToolButton#MotionButton:pressed,
+QToolButton#DPButton:pressed
+{
+	border-width:2px 1px 1px 2px;
+	border-image: url(theme/huaru/whiteblue/popupwidget_pushbutton_pressed.png) 2 1 1 2 repeat repeat; 
+}
+QToolButton#pushButton_Save:disabled,
+QToolButton#AddButton:disabled,
+QToolButton#MotionButton:disabled,
+QToolButton#DPButton:disabled
+{
+	color:#666666;
+	border-width:2px 1px 1px 2px;
+	border-image: url(theme/huaru/whiteblue/popupwidget_pushbutton_disabled.png) 2 1 1 2 repeat repeat; 
+}
+QToolButton#pushButton_Save::menu-button,
+QToolButton#AddButton:menu-button,
+QToolButton#MotionButton:menu-button,
+QToolButton#DPButton:menu-button
+{
+	width: 10px;
+	margin-left: 4px;
+	border-top-right-radius: 0px;
+	border-bottom-right-radius: 0px;
+}
+
+QToolButton#pushButton_Save::menu-button:hover,
+QToolButton#AddButton::menu-button:hover,
+QToolButton#MotionButton::menu-button:hover,
+QToolButton#DPButton::menu-button:hover
+{
+	border:1px solid #000000;;
+}
+
+QToolButton#pushButton_Save::menu-button:pressed,
+QToolButton#AddButton::menu-button:pressed,
+QToolButton#MotionButton::menu-button:pressed,
+QToolButton#DPButton::menu-button:pressed
+{
+	border:1px solid #000000;
+	background-color: rgb(37, 37, 37);
+}
+
+QToolButton#pushButton_Save::menu-arrow,
+QToolButton#AddButton::menu-arrow,
+QToolButton#AddButton::menu-arrow,
+QToolButton#MotionButton::menu-arrow,
+QToolButton#DPButton::menu-arrow
+{
+	image: url(theme/huaru/whiteblue/combobox_downarrow_hover.png);
+}
+/* ==============================QToolButton特化-结束=================================*/
+HRPropertyWidgetGroup
+{
+	background-color: rgba(8, 18, 35, 0);
+}
+
+HRPropertyWidgetGroup QWidget#group_MainWidget
+{
+	border-radius: 0px;
+	border:0px solid #000000;
+	background-color: rgba(8, 18, 35, 0);
+}
+
+HRUserDialog
+{
+	background-color: rgba(8, 18, 35, 0);
+}
+
+HRUserDialog QFrame#user_frame[Activate=false]
+{
+	background-color: rgba(242,248,255,165);
+	border-radius:2px;
+	border: 2px solid #2a85f2;
+}
+
+HRUserDialog QFrame#user_frame[Activate=true]
+{
+	background-color: rgba(242,248,255,165);
+	border-radius:2px;
+	border: 2px solid #1270e0;
+}
+
+HRUserDialog QLabel#label_userTitle
+{
+	height:32px;
+	color: #ffffff;
+	font: 20px "微软雅黑";
+}
+
+HRUserDialog QWidget#widget_title[Activate=false]
+{
+	max-height:32px;
+	background-color: qlineargradient(spread:pad, x1:1, y1:0.75, x2:1, y2:0, stop:0 #2a85f2, stop:1 #2a85f2);
+}
+
+HRUserDialog QWidget#widget_title[Activate=true]
+{
+	max-height:32px;
+	background-color: qlineargradient(spread:pad, x1:1, y1:0.75, x2:1, y2:0, stop:0 #1270e0, stop:1 #1270e0);
+}
+
+HRUserDialog QWidget#widget_center
+{
+	background:#f6fbfe;
+	border-bottom-left-radius: 1px;
+	border-bottom-right-radius: 1px;
+	border: 0px solid #547cb4;
+}
+
+HRUserDialog QPushButton#pushButton_UserMin[Activate=false]
+{
+	max-width:32px;
+	min-height:32px;
+	border:0px solid transparent;
+	background-color: #2a85f2;
+	image: url(theme/huaru/whiteblue/icons/user缩小--正常.png);
+}
+HRUserDialog QPushButton#pushButton_UserMin[Activate=false]::hover
+{
+	max-width:32px;
+	min-height:32px;
+	border:0px solid transparent;
+	background-color: #2a85f2;
+	image: url(theme/huaru/whiteblue/icons/user缩小--滑过.png);
+}
+
+HRUserDialog QPushButton#pushButton_UserMin[Activate=true]
+{
+	max-width:32px;
+	min-height:32px;
+	border:0px solid transparent;
+	background-color: #1270e0;
+	image: url(theme/huaru/whiteblue/icons/user缩小--正常.png);
+}
+HRUserDialog QPushButton#pushButton_UserMin[Activate=true]::hover
+{
+	max-width:32px;
+	min-height:32px;
+	border:0px solid transparent;
+	background-color: #1270e0;
+	image: url(theme/huaru/whiteblue/icons/user缩小--滑过.png);
+}
+
+HRUserDialog QPushButton#pushButton_UserMax[Activate=false]
+{
+	max-width:32px;
+	min-height:32px;
+	border:0px solid transparent;
+	background-color: #2a85f2;
+}
+HRUserDialog QPushButton#pushButton_UserMax[Activate=false]::hover
+{
+	max-width:32px;
+	min-height:32px;
+	border:0px solid transparent;
+	background-color: #2a85f2;
+}
+
+HRUserDialog QPushButton#pushButton_UserMax[Activate=true]
+{
+	max-width:32px;
+	min-height:32px;
+	border:0px solid transparent;
+	background-color: #1270e0;
+}
+HRUserDialog QPushButton#pushButton_UserMax[Activate=true]::hover
+{
+	max-width:32px;
+	min-height:32px;
+	border:0px solid transparent;
+	background-color: #1270e0;
+}
+ 
+HRUserDialog QPushButton#pushButton_UserClose[Activate=false]
+{
+	max-width:32px;
+	min-height:32px;
+	border:0px solid transparent;
+	border-radius: 0px;
+	border-top-right-radius: 4px;
+	background-color: #2a85f2;
+	border: 0px solid #2a85f2;
+	image: url(theme/huaru/whiteblue/icons/user关闭--正常.png);
+}
+HRUserDialog QPushButton#pushButton_UserClose[Activate=false]::hover
+{
+	max-width:32px;
+	min-height:32px;
+	border:0px solid transparent;
+	border-radius: 0px;
+	border-top-right-radius: 4px;
+	background-color: #2a85f2;
+	border: 0px solid #2a85f2;
+	image: url(theme/huaru/whiteblue/icons/user关闭--滑过.png);
+}
+
+HRUserDialog QPushButton#pushButton_UserClose[Activate=true]
+{
+	max-width:32px;
+	min-height:32px;
+	border:0px solid transparent;
+	border-radius: 0px;
+	border-top-right-radius: 4px;
+	background-color: #1270e0;
+	border: 0px solid #1270e0;
+	image: url(theme/huaru/whiteblue/icons/user关闭--正常.png);
+}
+HRUserDialog QPushButton#pushButton_UserClose[Activate=true]::hover
+{
+	max-width:32px;
+	min-height:0px;
+	border:0px solid transparent;
+	border-radius: 0px;
+	border-top-right-radius: 4px;
+	background-color: #1270e0;
+	border: 0px solid #1270e0;
+	image: url(theme/huaru/whiteblue/icons/user关闭--滑过.png);
+}
+
+/*QLabel 定制  HRUserDockDialog*/
+HRUserDockButton QWidget#widget
+{
+	border:0px;
+	background-color:rgba(0,0,0,0);
+}
+
+HRUserDockButton HRUserToolButton#toolButton
+{
+	border:0px;
+	background-color:rgba(0,0,0,0);
+}
+
+HRUserDockButton HRUserToolButton#toolButton::hover
+{
+	background-color: rgba(0, 0, 0, 0);
+}
+
+HRUserToolButton
+{
+	border: 0px;
+	background-color: rgba(0,0,0,0);
+	background-image: url();
+}
+
+HRUserDockDialog QLabel#label_Title
+{
+	border-image: url(theme/huaru/whiteblue/icons/title.png);
+	color: rgb(255, 255, 255);
+	padding-bottom:3px;
+	font-family:"黑体";
+	font-size:20px;
+	background: transparent;
+}
+
+HRUserDockDialog QWidget#widget_UserBorder
+{
+	background-color:rgb(235, 244, 255);
+	border: 1px solid #adb2b9;
+}
+
+HRUserDockDialog QWidget#widget_Background
+{
+	background-color: #f6fbfe;
+	border: 1px solid #adb2b9;
+}
+
+HRUserDockDialog HRUserToolButton#toolButton_Right
+{
+	background-color: rgba(0, 0, 0, 0);
+}
+
+HRUserDockDialog HRUserToolButton#toolButton_Top
+{
+	background-color: rgba(0, 0, 0, 0);
+}
+
+HRUserDockDialog HRUserToolButton#toolButton_Left
+{
+	background-color: rgba(0, 0, 0, 0);
+}
+
+HRUserDockDialog HRUserToolButton#toolButton_Bottom
+{
+	background-color: rgba(0, 0, 0, 0);
+}
+
+HRUserMenuBarDialog QWidget#widget_UserSkeleton
+{
+	height:63px;
+	background-color: transparent;
+	background-image: url(theme/huaru/whiteblue/icons/工具栏背景.png);
+	border: 0px;
+}
+
+HRUserMenuBarControlWidget QWidget#widget
+{
+	border-image: url(theme/huaru/whiteblue/icons/MenuBarControl.png);
+	border : 0px;
+}
+
+HRUserMenuBarDialog QWidget#widget_Main
+{
+	background-image: url();
+}
+
+HRUserMenuBarDialog QScrollArea
+{
+	background-color: rgba(0,0,0,0);
+	border: 0px;
+	background-image: url();
+}
+
+HRUserMenuBarDialog HRUserToolButton
+{
+	border: 0px;
+	background-image: url();
+}
+
+HRUserActionButton:hover
+{
+	background-color: rgba(255,255, 255, 100);
+}
+
+HRUserActionGroupDialog QLineEdit#lineEdit
+{
+	border:1px 	solid #b5c5d5;
+	font:bold 16px;
+	font-family:"微软雅黑";
+	color: rgb(0,47,134);
+	background-color: rgba(255,255, 255, 0);
+}
+
+HRUserActionGroupDialog QLineEdit#lineEdit:read-only
+{
+	border:0px;
+}
+
+HRUserMenuBarDialog QWidget#widget_Systeam_Left,
+HRUserMenuBarDialog QWidget#widget_Systeam_Right
+{
+	border: 0px;
+	min-width:230px;
+	min-height:63px;
+	background-color: transparent;
+}
+
+QMenu[IsPageMenu=true]
+{
+	background-color: #ffffff;
+	alternate-background-color: #f0f3f8;
+	border: 1px solid #cddaea;
+	
+	color: #002f86;
+	font:bold 16px;
+	font-family:"Microsoft YaHei UI";
+}
+
+QMenu::item[IsPageMenu=true]
+{
+	padding-left:40px;
+	min-width:134px;
+	max-width:134px;
+	min-height:36px;
+	max-height:36px;
+	
+	padding-top:0px;
+	padding-bottom:0px;
+	padding-right:0px;
+}
+
+QMenu::item:selected:enabled[IsPageMenu=true]
+{
+	background-color: #ffc45d;
+	color: #002f86;
+}
+
+QMenu::item:selected:!enabled[IsPageMenu=true]
+{
+	color: rgba(102, 102, 102, 255);
+}
+
+QMenu::item:!enabled[IsPageMenu=true]
+{
+	color: rgba(102, 102, 102, 255);
+}
+
+QMenu::item:checked[IsPageMenu=true]
+{
+	background-color: #fff3dd;
+}
+
+QMenu::indicator[IsPageMenu=true]
+{
+	background-color: #fff3dd;
+}
+
+QMenu::indicator:exclusive:checked:selected[IsPageMenu=true]
+{
+	background-color: #fff3dd;
+}
+
+QMenu::right-arrow[IsPageMenu=true]
+{
+	image:url();
+}
+
+QMenu::right-arrow:selected[IsPageMenu=true]
+{
+	image:url(theme/huaru/whiteblue/menu_right_arrow.png);
+	padding-right:5px;
+}
+
+QMenu[IsPageMenu=false]
+{
+	background-color: #ffffff;
+	alternate-background-color: #f0f3f8;
+	border: 1px solid #a0b3c0;
+	font:bold 16px;
+	font-family:"Microsoft YaHei UI";
+	color: #002f86;
+}
+
+QMenu::item[IsPageMenu=false]
+{
+	padding-left:40px;
+	min-width:134px;
+	max-width:134px;
+	min-height:36px;
+	max-height:36px;
+	
+	padding-top:0px;
+	padding-bottom:0px;
+	padding-right:0px;
+}
+
+QMenu::icon[IsPageMenu=false]
+{
+	min-height:22px;
+}
+
+QMenu::item:selected:enabled[IsPageMenu=false]
+{
+	background-color: #ffc45d;
+	color: #002f86;
+}
+
+QMenu::item:selected:!enabled[IsPageMenu=false]
+{
+	background-color: #ffffff;
+	color: #768ba5;
+}
+
+QMenu::item:!enabled[IsPageMenu=false]
+{
+	background-color: #ffffff;
+	color: #768ba5;
+}
+
+QMenu::item:checked[IsPageMenu=true]
+{
+	background-color: #fff3dd;
+}
+
+QMenu::indicator[IsPageMenu=true]
+{
+	background-color: #fff3dd;
+}
+
+QMenu::indicator:exclusive:checked:selected[IsPageMenu=true]
+{
+	background-color: #fff3dd;
+}
+
+
+/*title*/
+HRUserWindowTitileDialog QWidget#widget_Background
+{
+	background-image: url(theme/huaru/whiteblue/icons/title.png);
+}
+
+HRUserWindowTitileDialog QLabel#label_Title
+{
+	color:#ffffff;
+	font-family:"微软雅黑";
+	font-size:16px;
+}
+
+HRUserHeadTitleWidget QLabel#label_AppName
+{
+	color:#ffffff;
+	font:bold 19px;
+	font-family:"微软雅黑";
+}
+
+HRUserHeadTitleWidget QLabel#label_EName
+{
+	background-image: url(theme/huaru/whiteblue/icons/ENameBackground.png);
+	color:#ffffff;
+	font-size:10px;
+	font-family:"微软雅黑";
+}
+
+HRUserHeadTitleWidget QLabel#label_Line
+{
+	background-image: url(theme/huaru/whiteblue/icons/TitleSeparator.png);
+}
+
+HRUserHeadTitleWidget QLabel#label_Title
+{
+	color:#ffffff;
+	font-family:"微软雅黑";
+	font:/*bold*/ 14px;
+}
+
+HRUserInfoWidget QWidget#widget_Bg[Expand=false]
+{
+	background-image: url(theme/huaru/whiteblue/icons/UserInfoBackground_Collapse.png);
+}
+
+HRUserInfoWidget QWidget#widget_Bg[Expand=true]
+{
+	background-image: url(theme/huaru/whiteblue/icons/UserInfoBackground_Expand.png);
+}
+
+HRUserInfoWidget QToolButton#toolButton[Expand=false]
+{
+	border : 0px;
+	background-image: url(theme/huaru/whiteblue/icons/UserInfoBackground_Collapse.png);
+}
+
+HRUserInfoWidget QToolButton#toolButton[Expand=true]
+{
+	border : 0px;
+	background-image: url(theme/huaru/whiteblue/icons/UserInfoBackground_Expand.png);
+}
+
+HRUserInfoWidget QLabel#label_Name
+{
+	color: #ffffff;
+	font-size:12px;
+	font-family:"微软雅黑";
+	padding-left:0px;
+}
+
+HRUserInfoWidget QLabel#label_Portrait
+{
+	width:18px;
+	height:15px;
+	padding-left:0px;
+}
+
+HRUserInfoActionDialog 
+{
+	background-color: #0082dd;
+}
+
+HRUserInfoActionDialog QToolButton
+{
+	background-color: #0082dd;
+	color: #ffffff;
+	bordor:0px;
+	padding-left: 12px;
+}
+
+HRUserInfoActionDialog QToolButton:hover
+{
+	background-color: #4cb5ff;
+	color: #ffffff;
+	bordor:0px;
+	padding-left: 12px;
+}
+
+QStatusBar
+{
+	background-color: rgb(33, 100, 181);
+	color:#ffffff;
+	font-family:"微软雅黑";
+	font-size:15px;
+}
+
+QStatusBar QWidget
+{
+	height:23px;
+	background-color: rgb(33, 100, 181);
+	color:#ffffff;
+	font-family:"微软雅黑";
+	font-size:15px;
+}
+
+XCreatorNewClassWidget QLabel
+{
+	color: rgb(33,74,150);
+	font: 75 12pt "微软雅黑";
+}
+
+HRMapToolDialog QWidget
+{
+	background-color: rgba(0,0,0,0);
+	border: 0px solid rgba(0, 0, 0, 0);
+}
+
+HRMapToolDialog[IsHorizontal=false]
+{
+	border-image: url(theme/huaru/whiteblue/XScenario/地图面板/工具栏背景--竖直.png);
+	background-color: rgba(0,0,0,0);
+	border: 0px;
+}
+
+HRMapToolDialog[IsHorizontal=true]
+{
+	border-image: url(theme/huaru/whiteblue/XScenario/地图面板/工具栏背景--水平.png);
+	background-color: rgba(0,0,0,0);
+	border: 0px;
+}
+
+HRMapToolDialog QPushButton
+{
+	border: 0px solid rgba(0,0,0,0);
+	max-width:12px;
+	min-height:12px;
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/缩小箭头.png);
+}
+
+HRMapToolDialog QPushButton:hover
+{
+	border: 0px solid rgba(0,0,0,0);
+	max-width:12px;
+	min-height:12px;
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/缩小箭头.png);
+}
+
+HRMapToolDialog QLabel#label_spaceVertical
+{
+	background-image: url(theme/huaru/whiteblue/XScenario/地图面板/拖动--竖直.png);
+	background-color: rgba(110, 224, 255, 0);
+}
+
+HRMapToolDialog QLabel#label_spaceHorizontal
+{
+	background-image: url(theme/huaru/whiteblue/XScenario/地图面板/拖动--水平.png);
+	background-color: rgba(110, 224, 255, 0);
+}
+
+/*放大*/
+HRMapToolButton#action_In
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/放大--正常.png);
+}
+
+HRMapToolButton#action_In::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/放大--滑过.png);
+}
+
+HRMapToolButton#action_In:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/放大--选中.png);
+}
+
+/*缩小*/
+HRMapToolButton#action_Out
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/缩小--正常.png);
+}
+
+HRMapToolButton#action_Out::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/缩小--滑过.png);
+}
+
+HRMapToolButton#action_Out:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/缩小--选中.png);
+}
+
+/*默认*/
+HRMapToolButton#action_Default
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/箭头--正常.png);
+}
+
+HRMapToolButton#action_Default::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/箭头--滑过.png);
+}
+
+HRMapToolButton#action_Default:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/箭头--选中.png);
+}
+
+/*距离测量*/
+HRMapToolButton#action_Distance
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/距离--正常.png);
+}
+
+HRMapToolButton#action_Distance::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/距离--滑过.png);
+}
+
+HRMapToolButton#action_Distance:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/距离--选中.png);
+}
+HRMapToolButton#action_RoomDistance
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/空间距离--正常.png);
+}
+HRMapToolButton#action_RoomDistance::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/空间距离--滑过.png);
+}
+HRMapToolButton#action_RoomDistance:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/空间距离--选中.png);
+}
+HRMapToolButton#action_EarthSurfaceDistance
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/地表距离--正常.png);
+}
+HRMapToolButton#action_EarthSurfaceDistance::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/地表距离--滑过.png);
+}
+HRMapToolButton#action_EarthSurfaceDistance:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/地表距离--选中.png);
+}
+
+/*面积测量*/
+HRMapToolButton#action_Area
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/面积--正常.png);
+}
+
+HRMapToolButton#action_Area::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/面积--滑过.png);
+}
+
+HRMapToolButton#action_Area:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/面积--选中.png);
+}
+HRMapToolButton#action_StickGroundArea
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/贴地面积--正常.png);
+}
+HRMapToolButton#action_StickGroundArea::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/贴地面积--滑过.png);
+}
+
+HRMapToolButton#action_StickGroundArea:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/贴地面积--选中.png);
+}
+HRMapToolButton#action_RoomArea
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/空间面积--正常.png);
+}
+
+HRMapToolButton#action_RoomArea::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/空间面积--滑过.png);
+}
+
+HRMapToolButton#action_RoomArea:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/空间面积--选中.png);
+}
+
+/*重置*/
+HRMapToolButton#action_Reset
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/刷新--正常.png);
+}
+
+HRMapToolButton#action_Reset::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/刷新--滑过.png);
+}
+
+HRMapToolButton#action_Reset:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/刷新--选中.png);
+}
+
+/*方向*/
+HRMapToolButton#action_Direction
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/方向--正常.png);
+}
+
+HRMapToolButton#action_Direction::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/方向--滑过.png);
+}
+
+HRMapToolButton#action_Direction:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/方向--选中.png);
+}
+
+/*剖面*/
+HRMapToolButton#action_Section
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/剖面--正常.png);
+}
+
+HRMapToolButton#action_Section::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/剖面--滑过.png);
+}
+
+HRMapToolButton#action_Section:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/剖面--选中.png);
+}
+
+/*等值线*/
+HRMapToolButton#action_Equivalence
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/等值线--正常.png);
+}
+
+HRMapToolButton#action_Equivalence::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/等值线--滑过.png);
+}
+
+HRMapToolButton#action_Equivalence:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/等值线--选中.png);
+}
+
+/*通视*/
+HRMapToolButton#action_Intervisibility
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/面通视--正常.png);
+}
+
+HRMapToolButton#action_Intervisibility::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/面通视--滑过.png);
+}
+
+HRMapToolButton#action_Intervisibility:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/面通视--选中.png);
+}
+HRMapToolButton#action_Linevisibility
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/线通视--正常.png);
+}
+
+HRMapToolButton#action_Linevisibility::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/线通视--滑过.png);
+}
+
+HRMapToolButton#action_Linevisibility:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/线通视--选中.png);
+}
+HRMapToolButton#action_Bodyvisibility
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/体通视--正常.png);
+}
+
+HRMapToolButton#action_Bodyvisibility::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/体通视--滑过.png);
+}
+
+HRMapToolButton#action_Bodyvisibility:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/体通视--选中.png);
+}
+
+/*坡度*/
+HRMapToolButton#action_Gradient
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/坡度--正常.png);
+}
+
+HRMapToolButton#action_Gradient::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/坡度--滑过.png);
+}
+
+HRMapToolButton#action_Gradient:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/坡度--选中.png);
+}
+
+/*高差*/
+HRMapToolButton#action_HeightDifference
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/高差--正常.png);
+}
+
+HRMapToolButton#action_HeightDifference::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/高差--滑过.png);
+}
+
+HRMapToolButton#action_HeightDifference:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/高差--选中.png);
+}
+
+/*方里网*/
+HRMapToolButton#action_KilometerGird
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/方里网--正常.png);
+}
+
+HRMapToolButton#action_KilometerGird::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/方里网--滑过.png);
+}
+
+HRMapToolButton#action_KilometerGird:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/方里网--选中.png);
+}
+
+/*经纬网*/
+HRMapToolButton#action_LatLonGird
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/经纬网--正常.png);
+}
+
+HRMapToolButton#action_LatLonGird::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/经纬网--滑过.png);
+}
+
+HRMapToolButton#action_LatLonGird:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/经纬网--选中.png);
+}
+
+/*图层控制*/
+HRMapToolButton#action_GeoLayer
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/图层控制--正常.png);
+}
+
+HRMapToolButton#action_GeoLayer::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/图层控制--滑过.png);
+}
+
+HRMapToolButton#action_GeoLayer:pressed
+{
+	image: url(theme/huaru/whiteblue/XScenario/地图面板/图层控制--选中.png);
+}
+
+HRUserAnimationFrame QFrame#userStop_frame
+{
+	background:rgba(255, 255, 255, 230);
+}
+
+HRUserAnimationFrame QLabel#label_userTitle
+{
+	color: #ffffff;
+	font-size: 18px;
+	font-family:"微软雅黑";
+}
+
+HRUserAnimationFrame QWidget#widget_title
+{
+	height: 32px;
+	background-color: #1058b0;
+}
+
+HRUserAnimationFrame QWidget#widget_center,
+HRUserAnimationFrame QScrollBar:vertical
+{
+	background:rgba(255, 255, 255, 100);
+}
+
+HRUserAnimationFrame QPushButton#pushButton_Hide
+{
+	max-width:32px;
+	min-height:0px;
+	border:0px solid transparent;
+	border-radius:0px;
+	background-color: transparent;
+	image: url(theme/huaru/whiteblue/icons/user关闭--正常.png);
+}
+
+HRUserAnimationFrame QPushButton#pushButton_Hide::hover
+{
+	max-width:32px;
+	min-height:0px;
+	border:0px solid transparent;
+	border-radius: 0px;
+	background-color: transparent;
+	image: url(theme/huaru/whiteblue/icons/user关闭--滑过.png);
+}
+
+HRUserAnimationFrame QTreeView
+{
+	color:#002f86;
+	font-size: 16px;
+	font-family:"微软雅黑";
+	border: 0px solid transparent;
+	background-color: transparent;
+}
+
+HRUserAnimationFrame HRModelBoxFilterWidget
+{
+	height: 26px;
+	border: 1px solid #dae1ee;
+}
+
+HRUserAnimationFrame HRModelBoxHintLineEdit
+{
+	background-color: rgba(255, 255, 255, 165);
+	border: 1px solid #d1d9e4;
+}
+
+HRUserAnimationFrame QLabel#label_prompt
+{
+	font: 8pt "雅黑";
+	color: #3b5ea1;
+	padding-top:4px;
+	background-color: #f2f7fc;
+}
+
+HRUserAnimationFrame QLabel#label_DeployState
+{
+	max-height:8px;
+	font: 8pt "微软雅黑";
+	color: rgb(87, 137, 255);
+	margin-top:2px;
+	background-color: transparent;
+}
+
+/*Plugin Widgets*/
+
+QWidget HREntityDeployPlugin_Widget
+{
+	background-color: rgba(246,251,254,0);
+}
+
+HRControlProgressBar
+{
+	background-color: transparent;
+}
+
+HRControlProgressBar QWidget#widget_Background
+{
+	border-radius:3px;
+	border: 1px solid #469aff;
+}
+
+HRControlProgressBar QWidget#widget_Bar
+{
+	color: #ffffff;
+	font: 75 20px "微软雅黑"
+}
+
+HRControlProgressBar QAbstractButton
+{
+	background-color: transparent;
+	border:0px solid transparent;
+	min-width:20px;
+	min-height:20px;
+}
+
+HRControlProgressBar QAbstractButton:enabled
+{
+	background-color: transparent;
+	border:0px solid transparent;
+	min-width:20px;
+	min-height:20px;
+}
+
+HRControlProgressBar QAbstractButton::hover
+{
+	background-color: transparent;
+	border:0px solid transparent;
+	min-width:20px;
+	min-height:20px;
+}
+
+HRControlProgressBar QPushButton#pushButton_Abort
+{
+	image: url(theme/huaru/whiteblue/XScenario/进度控制/停止--正常.png);
+}
+
+HRControlProgressBar QPushButton#pushButton_Abort::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/进度控制/停止--滑过.png);
+}
+
+HRControlProgressBar QPushButton#pushButton_Back
+{
+	image: url(theme/huaru/whiteblue/XScenario/进度控制/后退--正常.png);
+}
+
+HRControlProgressBar QPushButton#pushButton_Back::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/进度控制/后退--滑过.png);
+}
+
+HRControlProgressBar QPushButton#pushButton_Back:!enabled
+{
+	border:0px solid rgba(0, 0, 0, 0);
+	background:transparent;
+	image: url(theme/huaru/whiteblue/XScenario/进度控制/后退--禁用.png);
+}
+
+HRControlProgressBar QPushButton#pushButton_RunState[RunState=false]
+{
+	image: url(theme/huaru/whiteblue/XScenario/进度控制/播放--正常.png);
+}
+HRControlProgressBar QPushButton#pushButton_RunState[RunState=false]::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/进度控制/播放--滑过.png);
+}
+
+HRControlProgressBar QPushButton#pushButton_RunState[RunState=true]
+{
+	image: url(theme/huaru/whiteblue/XScenario/进度控制/暂停--正常.png);
+}
+HRControlProgressBar QPushButton#pushButton_RunState[RunState=true]::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/进度控制/暂停--滑过.png);
+}
+
+HRControlProgressBar QPushButton#pushButton_FastForward
+{
+	image: url(theme/huaru/whiteblue/XScenario/进度控制/快进--正常.png);
+}
+HRControlProgressBar QPushButton#pushButton_FastForward::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/进度控制/快进--滑过.png);
+}
+HRControlProgressBar QPushButton#pushButton_FastForward:!enabled
+{
+	border:0px solid rgba(0, 0, 0, 0);
+	background:transparent;
+	image: url(theme/huaru/whiteblue/XScenario/进度控制/快进--禁用.png);
+}
+
+HRControlProgressBar QToolButton#toolButton_Config[Expand=false]
+{
+	image: url(theme/huaru/whiteblue/XScenario/进度控制/展开--正常.png);
+}
+HRControlProgressBar QToolButton#toolButton_Config[Expand=false]::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/进度控制/展开--滑过.png);
+}
+
+HRControlProgressBar QToolButton#toolButton_Config[Expand=true]
+{
+	image: url(theme/huaru/whiteblue/XScenario/进度控制/收起--正常.png);
+}
+HRControlProgressBar QToolButton#toolButton_Config[Expand=true]::hover
+{
+	image: url(theme/huaru/whiteblue/XScenario/进度控制/收起--滑过.png);
+}
+
+HRControlProgressBar QFrame#line
+{
+	border-image: url(theme/huaru/whiteblue/XScenario/进度控制/分割线.png);
+}
+
+HRControlProgressBar QWidget#widget_Bar
+{
+	background:#cce3ff;
+	border-bottom-left-radius:3px;
+	border-bottom-right-radius:3px;
+}
+
+HREmulationTimeWidget QLabel#label_Title
+{
+	background-image: url(theme/huaru/whiteblue/icons/TimeBackground.png);
+	color: rgba(216, 235, 255, 255);
+	font-family:"Arial Regular";
+	font: bold 11px;
+	padding-top: 6px;
+	padding-left: 8px;
+}
+
+HREmulationTimeWidget QLabel#label_Time
+{
+	background-image: url(theme/huaru/whiteblue/icons/TimeBackground.png);
+	color: rgba(216, 235, 255, 255);
+	font-family:"Arial Regular";
+	font: bold 16px;
+	padding-left: 6px;
+	padding-right: 6px;
+}
+
+QWidget#HRUserLoginDialog
+{
+	background-color: rgba(216, 235, 255, 0);
+}
+
+HRUserLoginDialog QWidget#widget_Background
+{
+	background: transparent;
+	border-image: url(theme/huaru/whiteblue/登录/大背景.png);
+}
+
+HRUserLoginDialog QWidget#widget_Logo
+{
+	background: transparent;
+	border-image: url(theme/huaru/whiteblue/登录/左侧贴图.png);
+}
+
+HRUserLoginDialog QLabel#label_Logo
+{
+	image: url(theme/huaru/whiteblue/登录/欢迎登录.png);
+	margin-left:137px;
+	margin-right:137px;
+}
+
+HRUserLoginDialog QPushButton#pushButton_Close
+{
+	width:38px;
+	height:38px;
+	background:transparent;
+	border:0px solid rgba(255,255,255,0);
+	image: url(theme/huaru/whiteblue/登录/关闭--正常.png);
+}
+
+HRUserLoginDialog QPushButton#pushButton_Close::hover
+{
+	width:38px;
+	height:38px;
+	background:transparent;
+	border:0px solid rgba(255,255,255,0);
+	image: url(theme/huaru/whiteblue/登录/关闭--滑过.png);
+}
+
+HRUserLoginDialog QPushButton#pushButton_UserButton
+{
+	width:16px;
+	height:16px;
+	background:transparent;
+	border:0px solid rgba(255,255,255,0);
+	image:url(theme/huaru/whiteblue/登录/user.png);
+}
+
+HRUserLoginDialog QPushButton#pushButton_UserButton::hover
+{
+	width:16px;
+	height:16px;
+	background:transparent;
+	border:0px solid rgba(255,255,255,0);
+	image:url(theme/huaru/whiteblue/登录/user.png);
+}
+
+HRUserLoginDialog QPushButton#pushButton_CleanNameButton
+{
+	width:16px;
+	height:16px;
+	background:transparent;
+	border:0px solid rgba(255,255,255,0);
+	image:url(theme/huaru/whiteblue/登录/删除--正常.png);
+}
+
+HRUserLoginDialog QPushButton#pushButton_CleanNameButton::hover
+{
+	width:16px;
+	height:16px;
+	background:transparent;
+	border:0px solid rgba(255,255,255,0);
+	image:url(theme/huaru/whiteblue/登录/删除--滑过.png);
+}
+
+HRUserLoginDialog QPushButton#pushButton_LockButton
+{
+	width:16px;
+	height:16px;
+	background:transparent;
+	border:0px solid rgba(255,255,255,0);
+}
+
+HRUserLoginDialog QPushButton#pushButton_LockButton::pressed
+{
+	width:16px;
+	height:16px;
+	background:transparent;
+	border:0px solid rgba(255,255,255,0);
+}
+
+HRUserLoginDialog QLabel#label_Register
+{
+	font-size:14px;
+	font-family:"微软雅黑";
+	color:#a0a0a0;
+	background:transparent;
+	text-decoration:underline
+}
+
+HRUserLoginDialog QLabel#label_Register:hover
+{
+	color:rgba(74, 165, 255, 255);
+	text-decoration:underline
+}
+
+HRUserLoginDialog QCheckBox#checkBox_RemberPwd
+{
+	font-size:14px;
+	font-family:"微软雅黑";
+	color:#a0a0a0;
+}
+
+HRUserLoginDialog QCheckBox#checkBox_RemberPwd:hover
+{
+	font-size:14px;
+	font-family:"微软雅黑";
+	color:rgba(74, 165, 255, 255);
+}
+
+HRUserLoginDialog QLineEdit#lineEdit_Name
+{
+	height:22px;
+	color:#333333;
+	font-size:14px;
+	background:transparent;
+	border-width:0;
+	border-bottom:1px solid rgba(195, 195, 195, 255);
+	padding-left:4px;
+	padding-right:40px;
+}
+
+HRUserLoginDialog QLineEdit#lineEdit_Name:focus
+{
+	color:#333333;
+}
+
+HRUserLoginDialog QLineEdit#lineEdit_Password
+{
+	height:22px;
+	color:#999999;
+	font-size:14px;
+	font-family:"微软雅黑";
+	background:transparent;
+	border-width:0;
+	border-bottom:1px solid rgba(195, 195, 195, 255);
+	padding-left:4px;
+	padding-right:30px;
+}
+
+HRUserLoginDialog QLineEdit#lineEdit_Password:focus
+{
+	color:#333333;
+	font-size:14px;
+}
+HRUserLoginDialog QPushButton#pushButton_Ok
+{
+	width:258px;
+	height:32px;
+	background:transparent;
+	border:0px solid rgba(255,255,255,0);
+	image: url(theme/huaru/whiteblue/登录/登录--正常.png);
+}
+
+HRUserLoginDialog QPushButton#pushButton_Ok::hover
+{
+	width:258px;
+	height:32px;
+	background:transparent;
+	border:0px solid rgba(255,255,255,0);
+	font-size:16px;
+	font-family:"微软雅黑";
+	image: url(theme/huaru/whiteblue/登录/登录--滑过.png);
+}
+
+HRUserLoginDialog QCheckBox#checkBox_RemberPwd::indicator:unchecked
+{
+	width: 12px;
+	height:12px;
+	font-size:16px;
+	image:url(theme/huaru/whiteblue/登录/复选框--未选中.png);
+}
+
+HRUserLoginDialog QCheckBox#checkBox_RemberPwd::indicator:checked
+{
+	width: 12px;
+	height:12px;
+	image:url(theme/huaru/whiteblue/登录/复选框--选中.png);
+}
+
+HRFontLableWidget QLabel#label_FontConfig
+{
+	min-width:28px;
+	max-height:28px;
+	image: url(theme/huaru/whiteblue/icons/字体设置.png);
+}
+
+HRUserTabBar QPushButton[selected=false]
+{
+	font-size:18px;
+	font-family:"微软雅黑";
+	background: #e1effe;
+	border-bottom:2px solid #68a3ea;
+	padding: 2px;
+	color: #003986;
+	border-left: 1px solid #68a3ea;
+	border-right: 0px solid;
+	border-top: 1px solid #dee6f3;
+}
+
+HRUserTabBar QPushButton[selected=true]
+{
+	font-size:18px;
+	font-family:"微软雅黑";
+	background: #1e6ccc;
+	border-bottom:2px solid #68a3ea;
+	padding: 2px;
+	color: #ffffff;
+	border-right: 0px solid;
+	border-left: 0px solid;
+	border-top: 1px solid #1e6ccc;
+}
+
+HRUserTabBar QPushButton#HRUserTabButton0[selected=false]
+{
+	border-left: 1px solid #dee6f3;
+}
+
+HRUserTabBar QPushButton#HRUserTabButton0[selected=true]
+{
+	border-left: 1px solid #1e6ccc;
+}
+
+HRUserTabBar QPushButton#HRUserTabButtonLast
+{
+	border-right: 1px solid #dee6f3;
+}
+
+HREngineEventWidget QTextEdit
+{
+	background: rgba(0, 0, 0, 255);
+	border: 0px solid #687069;
+	color: rgba(255, 255, 255, 255);
+}
+
+HREngineEventWidget QTextEdit::focus
+{
+	background: rgba(0, 0, 0, 255);
+	border: 0px solid #687069;
+	color: rgba(255, 255, 255, 255);
+}
+
+HRGlobalDisplayManagerDialog QTreeWidget#treeWidget_Config
+{
+	font-size: 14px;
+	font-family:"微软雅黑";
+	show-decoration-selected:1;
+	background-color: #ffffff;
+	alternate-background-color: #f0f3f8;
+	color:#002f86;
+	border: 1px solid #dee6ee;
+}
+
+HRUserMenuTabWidget QTabBar::tab
+{
+	font-family:"微软雅黑";
+	margin-left: 4px;
+	min-width:100px;
+	background: rgba(229, 237, 248, 255);
+	border: 1px solid rgba(183, 198, 216, 255);
+	border-bottom: 0px solid rgba(183, 198, 216, 255);
+	border-top-left-radius: 4px;
+	border-top-right-radius: 4px;
+}
+
+HRUserMenuTabWidget QTabBar::tab:selected
+{
+	color:#002f86;
+	background-color: rgb(246, 249, 253);
+	border: 1px solid #bac9db;
+	border-bottom: 0px solid rgba(183, 198, 216, 255);
+	border-top-left-radius: 4px;
+	border-top-right-radius: 4px;
+}
+
+HRUserMenuTabWidget QTabBar::tab:only-one
+{
+	margin-left: 8px;
+}
+
+HRUserMenuTabWidget QTabBar::tab:first
+{
+	margin-left: 8px;
+}
+
+HRUserMenuTabWidget QTabBar::tab:selected:first
+{
+	margin-left: 8px;
+}
+
+HRUserMenuTabWidget::tab-bar>QWidget
+{
+	border-left:0px solid rgba(183, 198, 216, 255);
+	border-right:0px solid rgba(183, 198, 216, 255);
+	background-color: rgba(223, 233 ,245, 255);
+}
+
+HRUserMenuTabWidget::pane
+{
+	border: 0px solid rgba(183, 198, 216, 255);
+	border-bottom: 0px solid rgba(183, 198, 216, 255);
+}
+
+HRClickableLabel
+{
+	font: bold 20px;
+	font-family:"微软雅黑";
+	color:rgba(239, 124, 0, 255);
+	padding-left:12px;
+	padding-top:20px;
+}
+
+/*弹出框的背景色*/
+
+HRUserManagerDialog QWidget#widget_UserMgrBack,
+HRMissionEditDlg QWidget#widget_MissionBack
+{
+	background:#f6fbfe;
+}
+
+HRScenarioRunOptionSetup #widget_status
+{
+	border:0px;
+	background:#dfe5ef;
+}
+
+HRRTMDataTranslate #widget_status,
+HRTranslateDialog #widget_status
+{
+	border:0px;
+	background:#dfe5ef;
+}
+
+HRModelBoxFilterWidget QLineEdit
+{
+	background:#ffffff;
+	height:26px;
+	border:1px solid #d0d8e2;
+	color:#a7b8ce; 
+}
+
+HRIconSelectDialog #widget_Back,
+HRIconSelectDialog #widget,
+HRIconSelectDialog #widget_Param,
+HRIconSelectDialog #splitter::handle,
+HRIconSelectDialog #splitter_2::handle
+{
+	background:#ffffff;
+}
+
+HRIconSelectDialog #widget_Status
+{
+	background:#eef2f6;
+}
+
+HRIconSelectDialog #widget_LibBack,
+HRIconSelectDialog #_MainIconTree
+{
+	background:#ffffff;
+	border:1px solid #dae1ee;
+}
+
+HRIconSelectDialog #lineEdit_Filter
+{
+	background:#ffffff;
+	height:26px;
+	border:1px solid #d0d8e2;
+	color:#a7b8ce; 
+}
+
+HRIconSelectDialog #_IconCatalogTree
+{
+	border:1px solid #dae1ee;
+	border-top:0px;
+}
+
+HRIconSelectDialog #widget
+{
+	background:#f6f9fb;
+	border:1px solid #dae1ee;
+	border-top:0px;
+}
+
+HRIconSelectDialog #groupBox,
+HRIconSelectDialog #groupBox_Name
+{
+	border-bottom:0px;
+	border-left:1px solid #dae1ee;
+	border-right:1px solid #dae1ee;
+}
+
+HRIconSelectDialog #_MainIconTree::item:hover,HRIconSelectDialog #_MainIconTree::branch:hover
+{
+	background: #fff3dd;
+	border: 1px solid #fff3dd;
+	border-left: 0px solid transparent;
+	border-right: 0px solid transparent;
+}
+
+HRIconSelectDialog #_MainIconTree::item:selected,HRIconSelectDialog #_MainIconTree::branch:selected  
+{
+	background: #ffc45d;
+	border: 1px solid #ffc45d;
+	border-left: 0px solid transparent;
+	border-right: 0px solid transparent;
+}
+
+/* ==============================补充通用控件样式 (QSplitter / QStatusBar / QProgressBar / LogConsole)==================================*/
+
+/* QSplitter 分割条 */
+QSplitter::handle {
+    background-color: #dae1ee;
+    border: 1px solid #a0b3c0;
+}
+QSplitter::handle:hover {
+    background-color: #0066cc;
+}
+QSplitter::handle:horizontal {
+    width: 5px;
+}
+QSplitter::handle:vertical {
+    height: 5px;
+}
+
+/* QStatusBar 状态栏 */
+QStatusBar {
+    background-color: #e5eef7;
+    border-top: 1px solid #dae1ee;
+    color: #003986;
+    font-size: 12px;
+}
+QStatusBar::item {
+    border: none;
+}
+
+/* QProgressBar 进度条 */
+QProgressBar {
+    background-color: #e5eef7;
+    border: 1px solid #a0b3c0;
+    border-radius: 4px;
+    text-align: center;
+    color: #003986;
+    font-weight: bold;
+}
+QProgressBar::chunk {
+    background-color: #0066cc;
+    border-radius: 3px;
+}
+
+/* QTextEdit & QTextBrowser 日志控制台与报告预览 */
+QTextEdit, QTextBrowser {
+    background-color: #ffffff;
+    color: #003986;
+    border: 1px solid #a0b3c0;
+    border-radius: 4px;
+    selection-background-color: #0066cc;
+    selection-color: #ffffff;
+}
+
+/* 状态徽章 Badge Label 通用基础样式 */
+QLabel.statusBadge {
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-weight: bold;
+    font-size: 12px;
+    background-color: #e5eef7;
+    color: #003986;
+    border: 1px solid #b0c4de;
+}
+
