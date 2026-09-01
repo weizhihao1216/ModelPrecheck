@@ -1,11 +1,12 @@
 #include "PackageScanner.h"
+#include "../utils/QtEncoding.h"
 #include <QDirIterator>
 #include <QFileInfo>
 
 ModelPackageFiles PackageScanner::ScanPackageDirectory(const std::string& packageDirStr) {
     ModelPackageFiles result;
     result.packageDir = packageDirStr;
-    QString rootDir = QString::fromStdString(packageDirStr);
+    QString rootDir = qUtf8(packageDirStr);
 
     if (rootDir.isEmpty() || !QDir(rootDir).exists()) {
         result.scanLog.push_back("FAIL: 模型包目录不存在: " + packageDirStr);
@@ -35,13 +36,11 @@ ModelPackageFiles PackageScanner::ScanPackageDirectory(const std::string& packag
         }
     }
 
-    // 1. Process Headers
     for (const auto& h : allHeaders) {
-        result.allHeaderFiles.push_back(h.toStdString());
+        result.allHeaderFiles.push_back(qToUtf8(h));
     }
     result.scanLog.push_back("PASS: 找到 C/C++ 头文件共 " + std::to_string(result.allHeaderFiles.size()) + " 个");
 
-    // Helper lambda to classify Release vs Debug
     auto isDebugFile = [](const QString& filePath) {
         QString lowerPath = filePath.toLower();
         QFileInfo info(filePath);
@@ -56,9 +55,8 @@ ModelPackageFiles PackageScanner::ScanPackageDirectory(const std::string& packag
         return false;
     };
 
-    // 2. Classify DLLs
     for (const auto& dll : allDlls) {
-        std::string sDll = dll.toStdString();
+        std::string sDll = qToUtf8(dll);
         result.allDllFiles.push_back(sDll);
         if (isDebugFile(dll)) {
             result.debugDllFiles.push_back(sDll);
@@ -68,9 +66,8 @@ ModelPackageFiles PackageScanner::ScanPackageDirectory(const std::string& packag
     }
     result.scanLog.push_back("PASS: 找到 DLL 动态库文件共 " + std::to_string(result.allDllFiles.size()) + " 个 (Release: " + std::to_string(result.releaseDllFiles.size()) + ", Debug: " + std::to_string(result.debugDllFiles.size()) + ")");
 
-    // 3. Classify LIBs
     for (const auto& lib : allLibs) {
-        std::string sLib = lib.toStdString();
+        std::string sLib = qToUtf8(lib);
         result.allLibFiles.push_back(sLib);
         if (isDebugFile(lib)) {
             result.debugLibFiles.push_back(sLib);

@@ -35,18 +35,36 @@ struct WeaponModelOutput {
 };
 #pragma pack(pop)
 
-// Function pointer prototypes
+// Function pointer prototypes — Singleton (global-state) API
 typedef int (*FnModelInit)(const WeaponModelParams* params);
 typedef int (*FnModelStep)(WeaponModelOutput* output);
 typedef void (*FnModelDestroy)();
 typedef const char* (*FnModelGetInfo)();
 
+// Function pointer prototypes — Handle-based (multi-instance) API
+typedef void* ModelHandle;
+typedef ModelHandle (*FnModelCreate)();
+typedef int (*FnModelInitEx)(ModelHandle handle, const WeaponModelParams* params);
+typedef int (*FnModelStepEx)(ModelHandle handle, WeaponModelOutput* output);
+typedef void (*FnModelDestroyEx)(ModelHandle handle);
+
 // SEH Helper functions to isolate hardware exceptions (Access Violation, Divide-by-Zero, Stack Overflow)
 std::string SehCodeToString(DWORD code);
+
+typedef void (*FnVoidNoArg)();
+typedef int (*FnIntNoArg)();
+
+bool SafeCallVoidNoArg(FnVoidNoArg fn, DWORD* outExceptionCode);
+bool SafeCallIntNoArg(FnIntNoArg fn, int* outResult, DWORD* outExceptionCode);
 
 bool SafeCallInit(FnModelInit fn, const WeaponModelParams* params, int* outResult, DWORD* outExceptionCode);
 bool SafeCallStep(FnModelStep fn, WeaponModelOutput* output, int* outResult, DWORD* outExceptionCode);
 bool SafeCallDestroy(FnModelDestroy fn, DWORD* outExceptionCode);
 bool SafeCallGetInfo(FnModelGetInfo fn, std::string& outInfo, DWORD* outExceptionCode);
+
+bool SafeCallCreate(FnModelCreate fn, ModelHandle* outHandle, DWORD* outExceptionCode);
+bool SafeCallInitEx(FnModelInitEx fn, ModelHandle handle, const WeaponModelParams* params, int* outResult, DWORD* outExceptionCode);
+bool SafeCallStepEx(FnModelStepEx fn, ModelHandle handle, WeaponModelOutput* output, int* outResult, DWORD* outExceptionCode);
+bool SafeCallDestroyEx(FnModelDestroyEx fn, ModelHandle handle, DWORD* outExceptionCode);
 
 #endif // SEH_HELPER_H

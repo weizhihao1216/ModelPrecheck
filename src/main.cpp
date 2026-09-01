@@ -10,11 +10,10 @@ int main(int argc, char* argv[]) {
     QCoreApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
 
     QApplication app(argc, argv);
-    
+
     qRegisterMetaType<PerfProfileReport>("PerfProfileReport");
     qRegisterMetaType<PerfSample>("PerfSample");
 
-    // Load theme style from embedded resource (or local themestyle.qss fallback)
     QFile qssFile(":/ui/themestyle.qss");
     if (!qssFile.open(QFile::ReadOnly | QFile::Text)) {
         qssFile.setFileName(app.applicationDirPath() + "/themestyle.qss");
@@ -22,6 +21,7 @@ int main(int argc, char* argv[]) {
     }
     if (qssFile.isOpen()) {
         QTextStream ts(&qssFile);
+        ts.setCodec("UTF-8");
         app.setStyleSheet(ts.readAll());
         qssFile.close();
     }

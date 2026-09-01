@@ -18,20 +18,19 @@ ChartViewerWidget::ChartViewerWidget(QWidget* parent)
 
     m_pTabWidget = new QTabWidget(this);
 
-    // --- Chart 1: Step CPU Time ---
     m_pTimeChart = new QChart();
     m_pTimeChart->setTitle("单步计算耗时抖动曲线 (CPU Step Execution Time)");
     m_pTimeChart->setTheme(QChart::ChartThemeLight);
 
     m_pTimeSeries = new QLineSeries();
     m_pTimeSeries->setName("单步耗时 (ms)");
-    QPen penTime(QColor("#0066cc")); // Deep blue
+    QPen penTime(QColor("#0066cc"));
     penTime.setWidth(2);
     m_pTimeSeries->setPen(penTime);
 
     m_pBudgetSeries = new QLineSeries();
     m_pBudgetSeries->setName("实时帧预算 (Frame Budget Line)");
-    QPen penBudget(QColor("#dc2626")); // Red dash
+    QPen penBudget(QColor("#dc2626"));
     penBudget.setStyle(Qt::DashLine);
     penBudget.setWidth(2);
     m_pBudgetSeries->setPen(penBudget);
@@ -48,10 +47,8 @@ ChartViewerWidget::ChartViewerWidget(QWidget* parent)
 
     m_pTimeChart->addSeries(m_pTimeSeries);
     m_pTimeChart->addSeries(m_pBudgetSeries);
-
     m_pTimeChart->addAxis(m_axisTimeX, Qt::AlignBottom);
     m_pTimeChart->addAxis(m_axisTimeY, Qt::AlignLeft);
-
     m_pTimeSeries->attachAxis(m_axisTimeX);
     m_pTimeSeries->attachAxis(m_axisTimeY);
     m_pBudgetSeries->attachAxis(m_axisTimeX);
@@ -60,14 +57,13 @@ ChartViewerWidget::ChartViewerWidget(QWidget* parent)
     m_pTimeChartView = new QChartView(m_pTimeChart, this);
     m_pTimeChartView->setRenderHint(QPainter::Antialiasing);
 
-    // --- Chart 2: Process Memory Footprint ---
     m_pMemChart = new QChart();
     m_pMemChart->setTitle("物理内存占用曲线 (Working Set Memory Footprint)");
     m_pMemChart->setTheme(QChart::ChartThemeLight);
 
     m_pMemSeries = new QLineSeries();
     m_pMemSeries->setName("Working Set 物理内存 (MB)");
-    QPen penMem(QColor("#16a34a")); // Emerald green
+    QPen penMem(QColor("#16a34a"));
     penMem.setWidth(2);
     m_pMemSeries->setPen(penMem);
 
@@ -82,51 +78,16 @@ ChartViewerWidget::ChartViewerWidget(QWidget* parent)
     m_axisMemY->setGridLineVisible(true);
 
     m_pMemChart->addSeries(m_pMemSeries);
-
     m_pMemChart->addAxis(m_axisMemX, Qt::AlignBottom);
     m_pMemChart->addAxis(m_axisMemY, Qt::AlignLeft);
-
     m_pMemSeries->attachAxis(m_axisMemX);
     m_pMemSeries->attachAxis(m_axisMemY);
 
     m_pMemChartView = new QChartView(m_pMemChart, this);
     m_pMemChartView->setRenderHint(QPainter::Antialiasing);
 
-    // --- Chart 3: Motion Trajectory ---
-    m_pTrajChart = new QChart();
-    m_pTrajChart->setTitle("模型飞行轨迹简图 (Altitude vs Simulation Time)");
-    m_pTrajChart->setTheme(QChart::ChartThemeLight);
-
-    m_pTrajSeries = new QLineSeries();
-    m_pTrajSeries->setName("高度 Altitude (m)");
-    QPen penTraj(QColor("#0284c7")); // Sky blue
-    penTraj.setWidth(2);
-    m_pTrajSeries->setPen(penTraj);
-
-    m_axisTrajX = new QValueAxis();
-    m_axisTrajX->setTitleText("仿真时间 SimTime (s)");
-    m_axisTrajX->setLabelFormat("%.2f");
-    m_axisTrajX->setGridLineVisible(true);
-
-    m_axisTrajY = new QValueAxis();
-    m_axisTrajY->setTitleText("高度 Alt (m)");
-    m_axisTrajY->setLabelFormat("%.1f");
-    m_axisTrajY->setGridLineVisible(true);
-
-    m_pTrajChart->addSeries(m_pTrajSeries);
-
-    m_pTrajChart->addAxis(m_axisTrajX, Qt::AlignBottom);
-    m_pTrajChart->addAxis(m_axisTrajY, Qt::AlignLeft);
-
-    m_pTrajSeries->attachAxis(m_axisTrajX);
-    m_pTrajSeries->attachAxis(m_axisTrajY);
-
-    m_pTrajChartView = new QChartView(m_pTrajChart, this);
-    m_pTrajChartView->setRenderHint(QPainter::Antialiasing);
-
     m_pTabWidget->addTab(m_pTimeChartView, "耗时抖动曲线");
     m_pTabWidget->addTab(m_pMemChartView, "内存占用曲线");
-    m_pTabWidget->addTab(m_pTrajChartView, "运动轨迹简图");
 
     mainLayout->addWidget(m_pTabWidget);
 }
@@ -150,7 +111,6 @@ void ChartViewerWidget::PrepareLiveProfiling(int totalSteps, double frameBudgetM
 
     m_axisTimeX->setRange(0, m_liveTotalSteps);
     m_axisTimeY->setRange(-0.5, m_liveBudgetMs * 1.25 + 0.5);
-
     m_axisMemX->setRange(0, m_liveTotalSteps);
 
     m_pTimeChart->update();
@@ -217,39 +177,8 @@ void ChartViewerWidget::UpdatePerfCharts(const PerfProfileReport& report) {
     m_pMemChartView->repaint();
 }
 
-void ChartViewerWidget::UpdateTrajectoryChart(const TrajectoryVerificationReport& report) {
-    m_pTrajSeries->clear();
-
-    if (report.timeList.empty()) return;
-
-    double minTime = report.timeList.front();
-    double maxTime = report.timeList.back();
-    if (maxTime <= minTime) maxTime = minTime + 1.0;
-
-    double minAlt = 1e9;
-    double maxAlt = -1e9;
-
-    for (size_t i = 0; i < report.timeList.size(); ++i) {
-        double alt = report.altList[i];
-        if (alt < minAlt) minAlt = alt;
-        if (alt > maxAlt) maxAlt = alt;
-        m_pTrajSeries->append(report.timeList[i], alt);
-    }
-
-    if (maxAlt <= minAlt) maxAlt = minAlt + 100.0;
-    double altMargin = (maxAlt - minAlt) * 0.1;
-    if (altMargin < 10.0) altMargin = 10.0;
-
-    m_axisTrajX->setRange(minTime, maxTime);
-    m_axisTrajY->setRange(minAlt - altMargin, maxAlt + altMargin);
-
-    m_pTrajChart->update();
-    m_pTrajChartView->repaint();
-}
-
 void ChartViewerWidget::ClearCharts() {
     m_pTimeSeries->clear();
     m_pBudgetSeries->clear();
     m_pMemSeries->clear();
-    m_pTrajSeries->clear();
 }

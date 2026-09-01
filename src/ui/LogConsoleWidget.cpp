@@ -19,7 +19,10 @@ LogConsoleWidget::LogConsoleWidget(QWidget* parent)
 
     m_pTextEdit = new QTextEdit(this);
     m_pTextEdit->setReadOnly(true);
-    m_pTextEdit->setStyleSheet("QTextEdit { background-color: #ffffff; color: #003986; font-family: Consolas, 'Courier New', monospace; font-size: 12px; border: 1px solid #a0b3c0; border-radius: 4px; }");
+    m_pTextEdit->setStyleSheet(
+        "QTextEdit { background-color: #ffffff; color: #003986; "
+        "font-family: 'Microsoft YaHei UI', Consolas, 'Courier New', monospace; "
+        "font-size: 12px; border: 1px solid #a0b3c0; border-radius: 4px; }");
 
     mainLayout->addLayout(topLayout);
     mainLayout->addWidget(m_pTextEdit, 1);

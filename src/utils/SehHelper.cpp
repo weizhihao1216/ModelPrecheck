@@ -45,6 +45,33 @@ static DWORD FilterSehException(DWORD code) {
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
+bool SafeCallVoidNoArg(FnVoidNoArg fn, DWORD* outExceptionCode) {
+    if (!fn) return false;
+    __try {
+        fn();
+        if (outExceptionCode) *outExceptionCode = 0;
+        return true;
+    }
+    __except (FilterSehException(GetExceptionCode())) {
+        if (outExceptionCode) *outExceptionCode = GetExceptionCode();
+        return false;
+    }
+}
+
+bool SafeCallIntNoArg(FnIntNoArg fn, int* outResult, DWORD* outExceptionCode) {
+    if (!fn) return false;
+    __try {
+        int res = fn();
+        if (outResult) *outResult = res;
+        if (outExceptionCode) *outExceptionCode = 0;
+        return true;
+    }
+    __except (FilterSehException(GetExceptionCode())) {
+        if (outExceptionCode) *outExceptionCode = GetExceptionCode();
+        return false;
+    }
+}
+
 bool SafeCallInit(FnModelInit fn, const WeaponModelParams* params, int* outResult, DWORD* outExceptionCode) {
     if (!fn) return false;
     __try {
@@ -104,4 +131,59 @@ bool SafeCallGetInfo(FnModelGetInfo fn, std::string& outInfo, DWORD* outExceptio
         outInfo = "";
     }
     return true;
+}
+
+bool SafeCallCreate(FnModelCreate fn, ModelHandle* outHandle, DWORD* outExceptionCode) {
+    if (!fn || !outHandle) return false;
+    __try {
+        *outHandle = fn();
+        if (outExceptionCode) *outExceptionCode = 0;
+        return (*outHandle != nullptr);
+    }
+    __except (FilterSehException(GetExceptionCode())) {
+        if (outExceptionCode) *outExceptionCode = GetExceptionCode();
+        *outHandle = nullptr;
+        return false;
+    }
+}
+
+bool SafeCallInitEx(FnModelInitEx fn, ModelHandle handle, const WeaponModelParams* params, int* outResult, DWORD* outExceptionCode) {
+    if (!fn || !handle) return false;
+    __try {
+        int res = fn(handle, params);
+        if (outResult) *outResult = res;
+        if (outExceptionCode) *outExceptionCode = 0;
+        return true;
+    }
+    __except (FilterSehException(GetExceptionCode())) {
+        if (outExceptionCode) *outExceptionCode = GetExceptionCode();
+        return false;
+    }
+}
+
+bool SafeCallStepEx(FnModelStepEx fn, ModelHandle handle, WeaponModelOutput* output, int* outResult, DWORD* outExceptionCode) {
+    if (!fn || !handle) return false;
+    __try {
+        int res = fn(handle, output);
+        if (outResult) *outResult = res;
+        if (outExceptionCode) *outExceptionCode = 0;
+        return true;
+    }
+    __except (FilterSehException(GetExceptionCode())) {
+        if (outExceptionCode) *outExceptionCode = GetExceptionCode();
+        return false;
+    }
+}
+
+bool SafeCallDestroyEx(FnModelDestroyEx fn, ModelHandle handle, DWORD* outExceptionCode) {
+    if (!fn || !handle) return false;
+    __try {
+        fn(handle);
+        if (outExceptionCode) *outExceptionCode = 0;
+        return true;
+    }
+    __except (FilterSehException(GetExceptionCode())) {
+        if (outExceptionCode) *outExceptionCode = GetExceptionCode();
+        return false;
+    }
 }

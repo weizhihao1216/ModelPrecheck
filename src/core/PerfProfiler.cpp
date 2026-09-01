@@ -1,73 +1,73 @@
 #include "PerfProfiler.h"
 #include <chrono>
 #include <cmath>
-#include <numeric>
-#include <QDebug>
 #include "../utils/MemoryUtils.h"
+#include "../utils/QtEncoding.h"
 
-PerfProfilerWorker::PerfProfilerWorker(DllLoader* loader, const WeaponModelParams& params, int totalSteps, double targetHz)
-    : m_pLoader(loader)
-    , m_params(params)
-    , m_totalSteps(totalSteps)
-    , m_targetHz(targetHz) {
+PerfProfilerWorker::PerfProfilerWorker(UserCodeHarness* harness, int totalRuns, double targetHz, uint32_t randomSeed)
+    : m_pHarness(harness)
+    , m_totalRuns(totalRuns)
+    , m_targetHz(targetHz)
+    , m_randomSeed(randomSeed) {
 }
 
-PerfProfilerWorker::~PerfProfilerWorker() {
-}
+PerfProfilerWorker::~PerfProfilerWorker() = default;
 
 void PerfProfilerWorker::process() {
     PerfProfileReport report;
-    report.totalSteps = m_totalSteps;
-    report.targetHz = m_targetHz;
-    report.frameBudgetMs = 1000.0 / (m_targetHz > 0 ? m_targetHz : 50.0);
+    report.totalSteps = m_totalRuns > 0 ? m_totalRuns : 1;
+    report.targetHz = m_targetHz > 0 ? m_targetHz : 50.0;
+    report.frameBudgetMs = 1000.0 / report.targetHz;
 
-    if (!m_pLoader || !m_pLoader->IsLoaded()) {
+    if (!m_pHarness || !m_pHarness->IsLoaded()) {
         report.realtimeVerdict = "FAIL";
-        report.exceptionLog = "DLL is not loaded or loader is null.";
+        report.exceptionLog = "用户 UserMain 未编译/未加载，请先在「用户代码」页编译";
+        emit logMessage("ERROR: " + qUtf8(report.exceptionLog));
         emit finished(report);
         return;
     }
 
-    // Call Model_Init
-    int initRes = 0;
-    std::string errStr;
-    emit logMessage("INFO: Initializing model for performance profiling...");
-    if (!m_pLoader->CallInit(m_params, initRes, errStr)) {
-        report.realtimeVerdict = "FAIL";
-        report.encounteredException = true;
-        report.exceptionLog = "Init Failed: " + errStr;
-        emit logMessage("ERROR: " + QString::fromStdString(errStr));
-        emit finished(report);
-        return;
-    }
+    emit logMessage(QString("INFO: 性能压测开始 — 串行尽快执行 UserMain × %1，单次实时性预算 %2 ms（不按 Hz 等待）")
+        .arg(report.totalSteps)
+        .arg(report.frameBudgetMs, 0, 'f', 3));
 
     ProcessMemoryStats initialMem = MemoryUtils::GetCurrentProcessMemory();
     report.initialMemoryMB = MemoryUtils::BytesToMB(initialMem.workingSetBytes);
 
     std::vector<double> timeSamples;
-    timeSamples.reserve(m_totalSteps);
+    timeSamples.reserve(static_cast<size_t>(report.totalSteps));
 
-    WeaponModelOutput outData;
     double totalTimeMs = 0.0;
     double minT = 1e9;
     double maxT = 0.0;
 
-    int sampleInterval = m_totalSteps / 100;
+    int sampleInterval = report.totalSteps / 100;
     if (sampleInterval < 1) sampleInterval = 1;
 
-    for (int i = 0; i < m_totalSteps; ++i) {
-        auto tStart = std::chrono::high_resolution_clock::now();
+    for (int i = 0; i < report.totalSteps; ++i) {
+        uint32_t seed = m_randomSeed + static_cast<uint32_t>(i) * 9973u;
+        RandomValueBlob blob = m_pHarness->Sample(seed);
 
-        int stepRes = 0;
-        bool stepOk = m_pLoader->CallStep(outData, stepRes, errStr);
+        int userRet = 0;
+        bool seh = false;
+        std::string err;
 
-        auto tEnd = std::chrono::high_resolution_clock::now();
-        double elapsedMs = std::chrono::duration<double, std::milli>(tEnd - tStart).count();
+        auto t0 = std::chrono::high_resolution_clock::now();
+        bool ok = m_pHarness->RunOnce(blob, &userRet, &seh, err);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double elapsedMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
-        if (!stepOk) {
+        if (!ok || seh) {
             report.encounteredException = true;
-            report.exceptionLog = "Step Exception at index " + std::to_string(i) + ": " + errStr;
-            emit logMessage("ERROR: " + QString::fromStdString(report.exceptionLog));
+            report.exceptionLog = "UserMain 第 " + std::to_string(i) + " 次执行异常: " + err;
+            emit logMessage("ERROR: " + qDecodeLog(report.exceptionLog));
+            break;
+        }
+        if (userRet != 0) {
+            report.encounteredException = true;
+            report.exceptionLog = "UserMain 第 " + std::to_string(i) + " 次返回非 0: " + std::to_string(userRet)
+                + " [" + blob.summary + "]";
+            emit logMessage("ERROR: " + qUtf8(report.exceptionLog));
             break;
         }
 
@@ -75,21 +75,18 @@ void PerfProfilerWorker::process() {
         totalTimeMs += elapsedMs;
         if (elapsedMs < minT) minT = elapsedMs;
         if (elapsedMs > maxT) maxT = elapsedMs;
-
         report.completedSteps++;
 
-        // Periodic sample reporting & real-time chart streaming
-        if (i % sampleInterval == 0 || i == m_totalSteps - 1) {
-            ProcessMemoryStats currentMem = MemoryUtils::GetCurrentProcessMemory();
-            double curMB = MemoryUtils::BytesToMB(currentMem.workingSetBytes);
+        if (i % sampleInterval == 0 || i == report.totalSteps - 1) {
+            ProcessMemoryStats curMem = MemoryUtils::GetCurrentProcessMemory();
+            double curMB = MemoryUtils::BytesToMB(curMem.workingSetBytes);
             PerfSample s;
             s.stepIndex = i;
             s.timeMs = elapsedMs;
             s.memoryMB = curMB;
             report.samples.push_back(s);
-
             emit sampleAdded(i, elapsedMs, curMB);
-            emit progressUpdated(i + 1, m_totalSteps, elapsedMs, curMB);
+            emit progressUpdated(i + 1, report.totalSteps, elapsedMs, curMB);
         }
     }
 
@@ -101,19 +98,14 @@ void PerfProfilerWorker::process() {
         report.avgTimeMs = totalTimeMs / report.completedSteps;
         report.minTimeMs = minT;
         report.maxTimeMs = maxT;
-
-        // Calculate StdDev (Jitter)
         double varianceSum = 0.0;
         for (double t : timeSamples) {
             varianceSum += (t - report.avgTimeMs) * (t - report.avgTimeMs);
         }
         report.jitterMs = std::sqrt(varianceSum / report.completedSteps);
-
-        // Memory growth per 10,000 steps
         report.memoryLeakRateMBPer10k = (report.memoryDeltaMB / report.completedSteps) * 10000.0;
     }
 
-    // Verdict calculation
     if (report.encounteredException) {
         report.realtimeVerdict = "FAIL";
     } else if (report.avgTimeMs > report.frameBudgetMs) {
@@ -124,12 +116,11 @@ void PerfProfilerWorker::process() {
         report.realtimeVerdict = "PASS";
     }
 
-    emit logMessage(QString("INFO: Profiling finished. Completed %1/%2 steps. Avg: %3 ms, Max: %4 ms, Verdict: %5")
+    emit logMessage(QString("INFO: 压测结束 %1/%2 次 UserMain，Avg=%3 ms，判定=%4")
         .arg(report.completedSteps)
         .arg(report.totalSteps)
         .arg(report.avgTimeMs, 0, 'f', 4)
-        .arg(report.maxTimeMs, 0, 'f', 4)
-        .arg(QString::fromStdString(report.realtimeVerdict)));
+        .arg(qUtf8(report.realtimeVerdict)));
 
     emit finished(report);
 }

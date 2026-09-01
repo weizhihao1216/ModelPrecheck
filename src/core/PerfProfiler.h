@@ -1,36 +1,35 @@
 #ifndef PERF_PROFILER_H
 #define PERF_PROFILER_H
 
-#include <QThread>
 #include <QObject>
 #include <QMetaType>
 #include <vector>
 #include <string>
-#include "DllLoader.h"
+#include "UserCodeHarness.h"
 
 struct PerfSample {
-    int stepIndex;
-    double timeMs;
-    double memoryMB;
+    int stepIndex = 0;   // UserMain 第几次执行（从 0 起）
+    double timeMs = 0.0;
+    double memoryMB = 0.0;
 };
 
 struct PerfProfileReport {
-    int totalSteps = 0;
+    int totalSteps = 0;       // 计划执行 UserMain 次数
     int completedSteps = 0;
     double targetHz = 50.0;
-    double frameBudgetMs = 20.0; // 1000.0 / targetHz
+    double frameBudgetMs = 20.0;
 
     double minTimeMs = 0.0;
     double maxTimeMs = 0.0;
     double avgTimeMs = 0.0;
-    double jitterMs = 0.0;       // Standard deviation
+    double jitterMs = 0.0;
 
     double initialMemoryMB = 0.0;
     double finalMemoryMB = 0.0;
     double memoryDeltaMB = 0.0;
     double memoryLeakRateMBPer10k = 0.0;
 
-    std::string realtimeVerdict; // "PASS", "WARNING", "FAIL"
+    std::string realtimeVerdict; // PASS / WARNING / FAIL
     bool encounteredException = false;
     std::string exceptionLog;
 
@@ -39,10 +38,11 @@ struct PerfProfileReport {
 
 Q_DECLARE_METATYPE(PerfProfileReport)
 
+// 通过反复调用已编译的 UserMain 做性能压测（串行、尽快连跑）
 class PerfProfilerWorker : public QObject {
     Q_OBJECT
 public:
-    PerfProfilerWorker(DllLoader* loader, const WeaponModelParams& params, int totalSteps, double targetHz);
+    PerfProfilerWorker(UserCodeHarness* harness, int totalRuns, double targetHz, uint32_t randomSeed = 1);
     ~PerfProfilerWorker();
 
 public slots:
@@ -55,10 +55,10 @@ signals:
     void logMessage(const QString& msg);
 
 private:
-    DllLoader* m_pLoader;
-    WeaponModelParams m_params;
-    int m_totalSteps;
+    UserCodeHarness* m_pHarness;
+    int m_totalRuns;
     double m_targetHz;
+    uint32_t m_randomSeed;
 };
 
 #endif // PERF_PROFILER_H

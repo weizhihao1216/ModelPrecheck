@@ -1,0 +1,5 @@
+add_library(MultiInstanceWeapon SHARED multi_instance_weapon.cpp)
+target_compile_definitions(MultiInstanceWeapon PRIVATE WEAPON_EXPORTS)
+if(MSVC)
+    target_compile_options(MultiInstanceWeapon PRIVATE /utf-8)
+endif()

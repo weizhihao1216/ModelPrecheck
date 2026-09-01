@@ -6,15 +6,59 @@
 #endif
 #include <windows.h>
 #include <string>
-#include <map>
+#include <vector>
 #include "../utils/SehHelper.h"
 #include "../utils/MemoryUtils.h"
 
+enum class ModelApiStyle {
+    Unknown = 0,
+    Singleton,
+    HandleBased,
+    CustomSequence
+};
+
+enum class CallPhase {
+    Setup = 0,    // 整个生命周期开始时执行一次（Create / Init 等）
+    Step = 1,     // 每个仿真步长执行一次
+    Teardown = 2  // 全部结束后执行一次
+};
+
+enum class CallSignature {
+    VoidNoArg = 0,
+    IntNoArg,
+    IntParams,
+    IntOutput,
+    CreateHandle,
+    IntHandleParams,
+    IntHandleOutput,
+    VoidHandle,
+    GetInfoStr
+};
+
+struct CallMappingEntry {
+    std::string symbolName;
+    CallPhase phase = CallPhase::Setup;
+    CallSignature signature = CallSignature::IntParams;
+    int handleSlot = 0;
+    bool enabled = true;
+};
+
 struct InterfaceMapping {
-    std::string initFuncName = "Model_Init";
-    std::string stepFuncName = "Model_Step";
-    std::string destroyFuncName = "Model_Destroy";
-    std::string getInfoFuncName = "Model_GetInfo";
+    std::vector<CallMappingEntry> entries;
+
+    static InterfaceMapping DefaultSingleton();
+    static InterfaceMapping DefaultHandleBased();
+    static const char* PhaseName(CallPhase p);
+    static const char* SignatureName(CallSignature s);
+    ModelApiStyle InferApiStyle() const;
+};
+
+struct CallContext {
+    WeaponModelParams params{};
+    WeaponModelOutput lastOutput{};
+    std::vector<ModelHandle> handleSlots;
+    std::string lastInfo;
+    int lastIntResult = 0;
 };
 
 struct LoadResult {
@@ -22,10 +66,9 @@ struct LoadResult {
     double initialMemoryDeltaKB = 0.0;
     std::string errorLog;
     DWORD exceptionCode = 0;
-    bool initBound = false;
-    bool stepBound = false;
-    bool destroyBound = false;
-    bool getInfoBound = false;
+    int boundSymbolCount = 0;
+    int missingSymbolCount = 0;
+    ModelApiStyle apiStyle = ModelApiStyle::Unknown;
 };
 
 class DllLoader {
@@ -39,22 +82,37 @@ public:
     bool IsLoaded() const { return m_hModule != NULL; }
     HMODULE GetModuleHandle() const { return m_hModule; }
     std::string GetDllPath() const { return m_dllPath; }
+    ModelApiStyle GetApiStyle() const { return m_apiStyle; }
+    const InterfaceMapping& GetMapping() const { return m_mapping; }
 
-    // Safe Invocation API wrapped in Win32 SEH
-    bool CallInit(const WeaponModelParams& params, int& outResult, std::string& outErrorStr);
-    bool CallStep(WeaponModelOutput& output, int& outResult, std::string& outErrorStr);
-    bool CallDestroy(std::string& outErrorStr);
-    bool CallGetInfo(std::string& outInfo, std::string& outErrorStr);
+    bool RunPhase(CallPhase phase, CallContext& ctx, std::string& outErrorStr);
+    bool RunLifecycle(CallContext& ctx, int stepCount, std::string& outErrorStr,
+                      std::vector<WeaponModelOutput>* outHistory = nullptr,
+                      std::vector<double>* outStepTimesMs = nullptr);
+
+    FnModelInit GetInitFn() const;
+    FnModelStep GetStepFn() const;
+    FnModelDestroy GetDestroyFn() const;
+    FnModelCreate GetCreateFn() const;
+    FnModelInitEx GetInitExFn() const;
+    FnModelStepEx GetStepExFn() const;
+    FnModelDestroyEx GetDestroyExFn() const;
 
 private:
-    HMODULE m_hModule;
+    struct BoundEntry {
+        CallMappingEntry meta;
+        FARPROC proc = nullptr;
+    };
+
+    bool InvokeBound(const BoundEntry& be, CallContext& ctx, std::string& outErrorStr);
+    void EnsureHandleSlot(CallContext& ctx, int slot) const;
+    ModelHandle GetHandle(const CallContext& ctx, int slot) const;
+
+    HMODULE m_hModule = NULL;
     std::string m_dllPath;
     InterfaceMapping m_mapping;
-
-    FnModelInit m_pfnInit;
-    FnModelStep m_pfnStep;
-    FnModelDestroy m_pfnDestroy;
-    FnModelGetInfo m_pfnGetInfo;
+    ModelApiStyle m_apiStyle = ModelApiStyle::Unknown;
+    std::vector<BoundEntry> m_bound;
 };
 
 #endif // DLL_LOADER_H

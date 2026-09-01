@@ -306,46 +306,7 @@ QTableView::item:!enabled
 	color:#a4a9b3;
 }
 
-/*Item未勾选状态，选框图片及背景图片*/
-QTableView::indicator:unchecked
-{
-	image: url(theme/huaru/whiteblue/checkbox_unchecked_normal.png);
-}
-/*Item勾选状态，选框图片及背景图片*/
-QTableView::indicator:checked 
-{
-	image: url(theme/huaru/whiteblue/checkbox_checked_normal.png);
-}
- /*Item未勾选hover状态，选框图片*/
-QTableView::indicator:unchecked:hover
-{
-	image: url(theme/huaru/whiteblue/checkbox_unchecked_hover.png);
-}
- /*Item勾选hover状态，选框图片及背景图片*/
-QTableView::indicator:checked:hover
-{
-    image: url(theme/huaru/whiteblue/checkbox_checked_hover.png);
-}
- /*Item未勾选状态，选框图片*/
-QTableView::indicator:unchecked:disabled
-{
-	image: url(theme/huaru/whiteblue/checkbox_unchecked_disabled.png);
-}
- /*Item勾选状态，选框图片及背景图片*/
-QTableView::indicator:checked:disabled
-{
-	image: url(theme/huaru/whiteblue/checkbox_checked_disabled.png);
-}
- /*Item未勾选状态，选框图片*/
-QTableView::indicator:unchecked:selected
-{
-	image: url(theme/huaru/whiteblue/checkbox_unchecked_normal.png);
-}
- /*Item勾选状态，选框图片及背景图片*/
-QTableView::indicator:checked:selected
-{
-	image: url(theme/huaru/whiteblue/checkbox_checked_normal.png);
-}
+/* Item 勾选框交由 Fusion 默认绘制，不在此覆盖 indicator */
 
 QTableView>QHeaderView::down-arrow 
 {
@@ -448,36 +409,7 @@ QListView::item:!selected:hover
 	background-color: #ffd178;
 }
 
- /*Item未勾选状态，选框图片及背景图片*/
-QListView::indicator:unchecked
-{
-	image: url(theme/huaru/whiteblue/checkbox_unchecked_normal.png);
-}
- /*Item勾选状态，选框图片及背景图片*/
-QListView::indicator:checked 
-{
-	image: url(theme/huaru/whiteblue/checkbox_checked_normal.png);
-}
- /*Item未勾选hover状态，选框图片*/
-QListView::indicator:unchecked:hover
-{
-	image: url(theme/huaru/whiteblue/checkbox_unchecked_hover.png);
-}
- /*Item勾选hover状态，选框图片及背景图片*/
-QListView::indicator:checked:hover
-{
-	image: url(theme/huaru/whiteblue/checkbox_checked_hover.png);
-}
- /*Item未勾选状态，选框图片*/
-QListView::indicator:unchecked:disabled
-{
-	image: url(theme/huaru/whiteblue/checkbox_unchecked_disabled.png);
-}
- /*Item勾选状态，选框图片及背景图片*/
-QListView::indicator:checked:disabled
-{
-	image: url(theme/huaru/whiteblue/checkbox_checked_disabled.png);
-}
+/* Item 勾选框交由 Fusion 默认绘制，不在此覆盖 indicator */
 /* ==============================QListView部分-结束===================================*/
 
 /* ==============================QComboBox部分-开始===================================*/

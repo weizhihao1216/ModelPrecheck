@@ -3,27 +3,42 @@
 
 #include <string>
 #include <vector>
+#include "DllLoader.h"
 
 struct HeaderExportConsistency {
     std::vector<std::string> declaredInHeader;
     std::vector<std::string> exportedInBinary;
 
-    std::vector<std::string> matchedFunctions;       // In both header and binary export table
-    std::vector<std::string> declaredButNotExported; // In header, missing in DLL/LIB
-    std::vector<std::string> exportedButNotDeclared; // In DLL/LIB, missing in header
+    std::vector<std::string> matchedFunctions;
+    std::vector<std::string> declaredButNotExported;
+    std::vector<std::string> exportedButNotDeclared;
 
     double consistencyRatio = 100.0;
     bool isFullyConsistent = true;
     std::vector<std::string> logMessages;
 };
 
+// One C function prototype extracted from a header (for UI selection)
+struct HeaderFunctionDecl {
+    std::string name;
+    std::string returnType;
+    std::string paramList;       // text inside (...)
+    std::string fullDeclaration; // display: "int Model_Init(const WeaponModelParams*)"
+    CallSignature suggestedSignature = CallSignature::IntNoArg;
+    CallPhase suggestedPhase = CallPhase::Setup;
+};
+
 struct HeaderAnalysisReport {
     std::string filePath;
-    std::string encoding;       // "UTF-8", "UTF-8 BOM", "GBK", "ASCII"
-    bool hasExternC;            // True if extern "C" guard exists
-    bool hasDeclspec;           // True if __declspec(dllexport/dllimport) macro exists
-    bool hasPackDirective;      // True if #pragma pack is used
-    std::vector<std::string> declaredFunctions; // All extracted function names
+    std::string encoding;
+    bool hasExternC = false;
+    bool hasDeclspec = false;
+    bool hasPackDirective = false;
+    std::vector<std::string> declaredFunctions;
+    std::vector<HeaderFunctionDecl> functionDecls;
+    ModelApiStyle detectedApiStyle = ModelApiStyle::Unknown;
+    std::string apiStyleDescription;
+    InterfaceMapping suggestedMapping;
     bool overallPass = true;
     std::vector<std::string> logMessages;
 };
@@ -32,8 +47,17 @@ class HeaderAnalyzer {
 public:
     static HeaderAnalysisReport AnalyzeHeader(const std::string& headerPath);
     static std::vector<std::string> ExtractDeclaredFunctions(const std::string& headerContent);
+    static std::vector<HeaderFunctionDecl> ExtractFunctionDeclarations(const std::string& headerContent);
+    static CallSignature ClassifyCallSignature(const std::string& returnType,
+                                               const std::string& paramList,
+                                               const std::string& funcName);
+    static CallPhase SuggestCallPhase(const std::string& funcName, CallSignature sig);
     static HeaderExportConsistency VerifyConsistency(const std::vector<std::string>& headerDeclaredFuncs,
                                                      const std::vector<std::string>& binaryExportedSymbols);
+
+    static ModelApiStyle DetectApiStyle(const std::string& headerContent,
+                                        InterfaceMapping* outMapping = nullptr,
+                                        std::string* outDescription = nullptr);
 };
 
 #endif // HEADER_ANALYZER_H
