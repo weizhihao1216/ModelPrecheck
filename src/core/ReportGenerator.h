@@ -57,6 +57,8 @@ struct FleetSessionReport {
     ConcurrencyTestReport multiModelReport;
     ConcurrencyTestReport multiThreadReport;
     PerfProfileReport perfReport;
+    int trajectoryModelsTested = 0;
+    int trajectoryModelsPassed = 0;
     bool overallPass = false;
 };
 

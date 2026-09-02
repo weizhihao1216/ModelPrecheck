@@ -12,7 +12,6 @@
 #include <QCoreApplication>
 #include <QPalette>
 #include <QColor>
-#include <QBrush>
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
@@ -22,6 +21,9 @@
 #include <QSignalBlocker>
 #include <QAbstractItemView>
 #include <QSizePolicy>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QTabBar>
 
 #include "ChartViewerWidget.h"
 #include "TrajectoryViewWidget.h"
@@ -29,6 +31,8 @@
 
 #include <QProgressDialog>
 #include <QEventLoop>
+#include <QStyle>
+#include <algorithm>
 
 namespace {
 
@@ -103,7 +107,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     QWidget* centralWidget = new QWidget(this);
     setCentralWidget(centralWidget);
-    QVBoxLayout* rootLayout = new QVBoxLayout(centralWidget);
+    QHBoxLayout* rootLayout = new QHBoxLayout(centralWidget);
     rootLayout->setContentsMargins(8, 8, 8, 8);
     rootLayout->setSpacing(8);
 
@@ -113,9 +117,10 @@ MainWindow::MainWindow(QWidget* parent)
 
     m_btnRunPrecheck = new QPushButton("一键预检全部型号", this);
     m_btnRunPrecheck->setStyleSheet(
-        "QPushButton { background-color: #0066cc; color: #ffffff; font-weight: bold; font-size: 13px; "
+        "QPushButton { background-color: #0066cc; color: #ffffff; font-family: \"Microsoft YaHei UI\"; "
+        "font-weight: bold; font-size: 13px; "
         "padding: 8px 18px; border-radius: 4px; } "
-        "QPushButton:hover { background-color: #0052a3; } "
+        "QPushButton:hover { background-color: #ffd178; color: #002f86; } "
         "QPushButton:pressed { background-color: #003d7a; }");
     FitButtonText(m_btnRunPrecheck);
 
@@ -147,19 +152,54 @@ MainWindow::MainWindow(QWidget* parent)
     layoutBadges->addWidget(m_lblDllStatus);
     layoutBadges->addStretch(1);
 
+    // --- Guided workflow: always shows where the user is and what comes next ---
+    QGroupBox* grpWorkflow = new QGroupBox("操作流程", this);
+    QVBoxLayout* workflowLayout = new QVBoxLayout(grpWorkflow);
+    QHBoxLayout* workflowStepsLayout = new QHBoxLayout();
+    const QStringList workflowNames = {
+        "1 添加型号", "2 选择模型包", "3 配置 UserMain",
+        "4 编译型号", "5 执行测试", "6 查看报告"
+    };
+    for (const QString& name : workflowNames) {
+        QLabel* step = new QLabel(name, grpWorkflow);
+        step->setAlignment(Qt::AlignCenter);
+        step->setProperty("workflowStep", true);
+        step->setProperty("stepState", "pending");
+        step->setMinimumHeight(32);
+        workflowStepsLayout->addWidget(step, 1);
+        m_workflowSteps.push_back(step);
+    }
+    m_lblWorkflowSummary = new QLabel(
+        QStringLiteral("当前步骤：点击“添加型号”开始配置第三方模型。"), grpWorkflow);
+    m_lblWorkflowSummary->setWordWrap(true);
+    m_lblWorkflowSummary->setProperty("workflowSummary", true);
+    workflowLayout->addLayout(workflowStepsLayout);
+    workflowLayout->addWidget(m_lblWorkflowSummary);
+
     // --- Content: left models panel + right tabs ---
     QSplitter* splitterContent = new QSplitter(Qt::Horizontal, this);
 
-    // ========== Left: 型号与 UserMain ==========
-    QGroupBox* grpModels = new QGroupBox("型号与 UserMain", this);
-    QHBoxLayout* layoutTabModels = new QHBoxLayout(grpModels);
+    // ========== Far left: fixed full-height test navigation ==========
+    QGroupBox* grpNavigation = new QGroupBox("功能导航", this);
+    QVBoxLayout* navigationLayout = new QVBoxLayout(grpNavigation);
+    m_listTestNavigation = new QListWidget(grpNavigation);
+    m_listTestNavigation->addItem(QStringLiteral("头文件规范检查"));
+    m_listTestNavigation->addItem(QStringLiteral("LIB 库文件检查"));
+    m_listTestNavigation->addItem(QStringLiteral("DLL 文件与依赖检查"));
+    m_listTestNavigation->addItem(QStringLiteral("DLL 接口与加载检查"));
+    m_listTestNavigation->addItem(QStringLiteral("UserMain 性能压测"));
+    m_listTestNavigation->addItem(QStringLiteral("内存泄漏监测"));
+    m_listTestNavigation->addItem(QStringLiteral("运行轨迹查看"));
+    m_listTestNavigation->addItem(QStringLiteral("多型号并行"));
+    m_listTestNavigation->addItem(QStringLiteral("多线程稳定性"));
+    m_listTestNavigation->addItem(QStringLiteral("查看报告"));
+    m_listTestNavigation->setProperty("testNavigation", true);
+    navigationLayout->addWidget(m_listTestNavigation, 1);
 
-    QWidget* leftPanel = new QWidget(grpModels);
-    QVBoxLayout* leftLayout = new QVBoxLayout(leftPanel);
-    leftLayout->setContentsMargins(0, 0, 0, 0);
-    leftLayout->addWidget(new QLabel("型号列表:", this));
+    // ========== Middle: fixed model list ==========
+    QGroupBox* grpModels = new QGroupBox("型号列表", this);
+    QVBoxLayout* leftLayout = new QVBoxLayout(grpModels);
     m_listModels = new QListWidget(this);
-    m_listModels->setMinimumWidth(160);
     leftLayout->addWidget(m_listModels, 1);
     QHBoxLayout* modelBtnRow = new QHBoxLayout();
     m_btnAddModel = new QPushButton("添加型号", this);
@@ -170,9 +210,11 @@ MainWindow::MainWindow(QWidget* parent)
     modelBtnRow->addWidget(m_btnRemoveModel);
     leftLayout->addLayout(modelBtnRow);
 
-    QWidget* rightPanel = new QWidget(grpModels);
+    // ========== Right: one scrollable workflow page ==========
+    QGroupBox* rightPanel = new QGroupBox("型号与 UserMain 配置", this);
+    m_modelSetupPanel = rightPanel;
     QVBoxLayout* rightLayout = new QVBoxLayout(rightPanel);
-    rightLayout->setContentsMargins(0, 0, 0, 0);
+    rightLayout->setContentsMargins(12, 12, 12, 12);
 
     QFormLayout* formModel = new QFormLayout();
     formModel->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
@@ -190,33 +232,48 @@ MainWindow::MainWindow(QWidget* parent)
         QStringLiteral("提示：授权文件或文件夹请放在第三方模型 dll 同级目录，如不可用可复制一份放在本 exe 同级目录下。"),
         this);
     m_lblLicenseHint->setWordWrap(true);
-    m_lblLicenseHint->setStyleSheet("color: #006633; font-size: 11px;");
+    m_lblLicenseHint->setStyleSheet("color: #60a5fa; font-size: 11px;");
     rightLayout->addLayout(formModel);
     rightLayout->addWidget(m_lblLicenseHint);
 
+    m_lblPathStageStatus = new QLabel(
+        QStringLiteral("步骤 2：请选择有效的模型包路径，随后将显示头文件和 UserMain 配置。"), this);
+    m_lblPathStageStatus->setWordWrap(true);
+    m_lblPathStageStatus->setProperty("pathStageStatus", true);
+    rightLayout->addWidget(m_lblPathStageStatus);
+
+    m_modelDetailPanel = new QWidget(grpModels);
+    m_modelDetailPanel->setObjectName(QStringLiteral("modelDetailPanel"));
+    QVBoxLayout* detailLayout = new QVBoxLayout(m_modelDetailPanel);
+    detailLayout->setContentsMargins(10, 10, 10, 10);
+
     QHBoxLayout* hdrPickRow = new QHBoxLayout();
-    hdrPickRow->addWidget(new QLabel("包含头文件(可多选):", this));
+    QLabel* headerTitle = new QLabel("步骤 3.1：选择包含头文件（可多选）", this);
+    headerTitle->setProperty("sectionTitle", true);
+    hdrPickRow->addWidget(headerTitle);
     m_btnRefreshModelHeaders = new QPushButton("刷新列表", this);
     FitButtonText(m_btnRefreshModelHeaders);
     hdrPickRow->addWidget(m_btnRefreshModelHeaders);
     hdrPickRow->addStretch(1);
-    rightLayout->addLayout(hdrPickRow);
+    detailLayout->addLayout(hdrPickRow);
 
     m_listHarnessHeaders = new QListWidget(this);
     m_listHarnessHeaders->setSelectionMode(QAbstractItemView::NoSelection);
     m_listHarnessHeaders->setMinimumHeight(100);
     m_listHarnessHeaders->setMaximumHeight(160);
-    rightLayout->addWidget(m_listHarnessHeaders);
+    detailLayout->addWidget(m_listHarnessHeaders);
 
-    rightLayout->addWidget(new QLabel("UserMain 函数体:", this));
-    m_editUserMain = new QPlainTextEdit(this);
-    m_editUserMain->setMinimumHeight(140);
-    QFont mono("Consolas", 10);
-    m_editUserMain->setFont(mono);
-    rightLayout->addWidget(m_editUserMain, 2);
+    QLabel* userMainTitle = new QLabel("步骤 3.2：编写 UserMain 函数体", this);
+    userMainTitle->setProperty("sectionTitle", true);
+    detailLayout->addWidget(userMainTitle);
+    m_editUserMain = new CppCodeEditor(this);
+    m_editUserMain->setMinimumHeight(180);
+    detailLayout->addWidget(m_editUserMain, 2);
 
     QHBoxLayout* rndTitle = new QHBoxLayout();
-    rndTitle->addWidget(new QLabel("随机变量 (R.变量名):", this));
+    QLabel* randomTitle = new QLabel("步骤 3.3：配置随机变量（R.变量名）", this);
+    randomTitle->setProperty("sectionTitle", true);
+    rndTitle->addWidget(randomTitle);
     m_btnAddRandomVar = new QPushButton("添加变量", this);
     m_btnRemoveRandomVar = new QPushButton("删除选中", this);
     FitButtonText(m_btnAddRandomVar);
@@ -224,39 +281,95 @@ MainWindow::MainWindow(QWidget* parent)
     rndTitle->addStretch(1);
     rndTitle->addWidget(m_btnAddRandomVar);
     rndTitle->addWidget(m_btnRemoveRandomVar);
-    rightLayout->addLayout(rndTitle);
+    detailLayout->addLayout(rndTitle);
 
     m_tblRandomVars = new QTableWidget(0, 5, this);
     m_tblRandomVars->setHorizontalHeaderLabels({ "启用", "变量名", "类型", "最小值", "最大值" });
     m_tblRandomVars->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_tblRandomVars->setMinimumHeight(100);
     m_tblRandomVars->setMaximumHeight(150);
-    rightLayout->addWidget(m_tblRandomVars);
+    detailLayout->addWidget(m_tblRandomVars);
 
     QHBoxLayout* layoutCompile = new QHBoxLayout();
-    m_btnCompileCurrent = new QPushButton("编译当前型号", this);
+    m_btnCompileCurrent = new QPushButton("步骤 4：编译当前型号", this);
     m_btnCompileAll = new QPushButton("编译全部型号", this);
     FitButtonText(m_btnCompileCurrent);
     FitButtonText(m_btnCompileAll);
     layoutCompile->addWidget(m_btnCompileCurrent);
     layoutCompile->addWidget(m_btnCompileAll);
     layoutCompile->addStretch(1);
-    rightLayout->addLayout(layoutCompile);
+    detailLayout->addLayout(layoutCompile);
 
     m_lblHarnessStatus = new QLabel("Harness: 未编译", this);
     m_lblHarnessStatus->setWordWrap(true);
-    rightLayout->addWidget(m_lblHarnessStatus);
-
-    layoutTabModels->addWidget(leftPanel);
-    layoutTabModels->addWidget(rightPanel, 1);
-    grpModels->setMinimumWidth(420);
+    detailLayout->addWidget(m_lblHarnessStatus);
+    rightLayout->addWidget(m_modelDetailPanel, 1);
 
     // ========== Right tabs ==========
     m_pCentralTabs = new QTabWidget(this);
 
-    // Tab 0: Static PE View (always present; multi-model: pick 型号 then DLL)
+    // Tab 0: Header file convention check
+    QWidget* tabHeader = new QWidget(this);
+    QVBoxLayout* layoutTabHeader = new QVBoxLayout(tabHeader);
+    QLabel* headerHint = new QLabel(
+        QStringLiteral("检查头文件编码、extern \"C\"、导出声明和接口原型。"), tabHeader);
+    headerHint->setProperty("pageHint", true);
+    layoutTabHeader->addWidget(headerHint);
+    QHBoxLayout* layoutHeaderPick = new QHBoxLayout();
+    layoutHeaderPick->addWidget(new QLabel(QStringLiteral("型号:"), tabHeader));
+    m_comboHeaderModel = new QComboBox(tabHeader);
+    layoutHeaderPick->addWidget(m_comboHeaderModel);
+    layoutHeaderPick->addWidget(new QLabel(QStringLiteral("头文件:"), tabHeader));
+    m_comboHeaderFile = new QComboBox(tabHeader);
+    m_comboHeaderFile->setMinimumWidth(320);
+    layoutHeaderPick->addWidget(m_comboHeaderFile, 1);
+    m_btnCheckHeader = new QPushButton(QStringLiteral("检查本项"), tabHeader);
+    FitButtonText(m_btnCheckHeader);
+    layoutHeaderPick->addWidget(m_btnCheckHeader);
+    layoutTabHeader->addLayout(layoutHeaderPick);
+    m_lblHeaderResult = new QLabel(QStringLiteral("检查结果: 尚未执行"), tabHeader);
+    layoutTabHeader->addWidget(m_lblHeaderResult);
+    m_tblHeaderFunctions = new QTableWidget(0, 2, tabHeader);
+    m_tblHeaderFunctions->setHorizontalHeaderLabels({ QStringLiteral("接口函数"), QStringLiteral("完整声明") });
+    m_tblHeaderFunctions->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_tblHeaderFunctions->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    layoutTabHeader->addWidget(m_tblHeaderFunctions, 1);
+
+    // Tab 1: LIB file check
+    QWidget* tabLib = new QWidget(this);
+    QVBoxLayout* layoutTabLib = new QVBoxLayout(tabLib);
+    QLabel* libHint = new QLabel(
+        QStringLiteral("检查 LIB 文件架构、库类型和包含的接口符号。"), tabLib);
+    libHint->setProperty("pageHint", true);
+    layoutTabLib->addWidget(libHint);
+    QHBoxLayout* layoutLibPick = new QHBoxLayout();
+    layoutLibPick->addWidget(new QLabel(QStringLiteral("型号:"), tabLib));
+    m_comboLibModel = new QComboBox(tabLib);
+    layoutLibPick->addWidget(m_comboLibModel);
+    layoutLibPick->addWidget(new QLabel(QStringLiteral("LIB 文件:"), tabLib));
+    m_comboLibFile = new QComboBox(tabLib);
+    m_comboLibFile->setMinimumWidth(320);
+    layoutLibPick->addWidget(m_comboLibFile, 1);
+    m_btnCheckLib = new QPushButton(QStringLiteral("检查本项"), tabLib);
+    FitButtonText(m_btnCheckLib);
+    layoutLibPick->addWidget(m_btnCheckLib);
+    layoutTabLib->addLayout(layoutLibPick);
+    m_lblLibResult = new QLabel(QStringLiteral("检查结果: 尚未执行"), tabLib);
+    layoutTabLib->addWidget(m_lblLibResult);
+    m_tblLibSymbols = new QTableWidget(0, 1, tabLib);
+    m_tblLibSymbols->setHorizontalHeaderLabels({ QStringLiteral("LIB 中发现的符号") });
+    m_tblLibSymbols->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_tblLibSymbols->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    layoutTabLib->addWidget(m_tblLibSymbols, 1);
+
+    // Tab 2: DLL file structure and dependency check
     QWidget* tabPe = new QWidget(this);
     QVBoxLayout* layoutTabPe = new QVBoxLayout(tabPe);
+    m_lblPePageHint = new QLabel(
+        QStringLiteral("检查 DLL 是 32/64 位、运行库类型，以及它依赖的其他 DLL 是否齐全。"), tabPe);
+    m_lblPePageHint->setWordWrap(true);
+    m_lblPePageHint->setProperty("pageHint", true);
+    layoutTabPe->addWidget(m_lblPePageHint);
     QHBoxLayout* layoutPePick = new QHBoxLayout();
     layoutPePick->addWidget(new QLabel("型号:", this));
     m_comboPeModel = new QComboBox(this);
@@ -268,49 +381,93 @@ MainWindow::MainWindow(QWidget* parent)
     m_comboPeDll->setMinimumWidth(280);
     m_comboPeDll->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     layoutPePick->addWidget(m_comboPeDll, 1);
+    m_btnCheckDllFile = new QPushButton(QStringLiteral("检查本项"), tabPe);
+    FitButtonText(m_btnCheckDllFile);
+    layoutPePick->addWidget(m_btnCheckDllFile);
     layoutTabPe->addLayout(layoutPePick);
 
     QHBoxLayout* layoutPeInfo = new QHBoxLayout();
     m_lblPeArch = new QLabel("CPU 架构: N/A", this);
-    m_lblPeCrt = new QLabel("CRT 链接方式: N/A", this);
+    m_lblPeCrt = new QLabel("运行库类型: N/A", this);
     layoutPeInfo->addWidget(m_lblPeArch);
     layoutPeInfo->addWidget(m_lblPeCrt);
     layoutPeInfo->addStretch(1);
 
-    QSplitter* splitterPeTables = new QSplitter(Qt::Horizontal, this);
-
-    QGroupBox* grpImports = new QGroupBox("依赖库扫描明细 (Import Directory)", this);
+    QGroupBox* grpImports = new QGroupBox("DLL 依赖文件检查", this);
     QVBoxLayout* lImp = new QVBoxLayout(grpImports);
     m_tblImports = new QTableWidget(0, 3, this);
     m_tblImports->setHorizontalHeaderLabels({ "依赖 DLL 名称", "状态", "解析路径" });
     m_tblImports->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_tblImports->setEditTriggers(QAbstractItemView::NoEditTriggers);
     lImp->addWidget(m_tblImports);
 
-    QGroupBox* grpExports = new QGroupBox("导出接口符号比对 (Export Directory)", this);
+    layoutTabPe->addLayout(layoutPeInfo);
+    layoutTabPe->addWidget(grpImports, 1);
+
+    // Tab 3: DLL exported interfaces and safe loading
+    QWidget* tabLoad = new QWidget(this);
+    QVBoxLayout* layoutTabLoad = new QVBoxLayout(tabLoad);
+    m_lblLoadPageHint = new QLabel(
+        QStringLiteral("检查 DLL 是否提供所需接口，并验证程序能否安全加载该 DLL。"), tabLoad);
+    m_lblLoadPageHint->setWordWrap(true);
+    m_lblLoadPageHint->setProperty("pageHint", true);
+    layoutTabLoad->addWidget(m_lblLoadPageHint);
+
+    QHBoxLayout* layoutLoadPick = new QHBoxLayout();
+    layoutLoadPick->addWidget(new QLabel("型号:", tabLoad));
+    m_comboLoadModel = new QComboBox(tabLoad);
+    m_comboLoadModel->setMinimumWidth(160);
+    m_comboLoadModel->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    layoutLoadPick->addWidget(m_comboLoadModel);
+    layoutLoadPick->addWidget(new QLabel("DLL 路径:", tabLoad));
+    m_comboLoadDll = new QComboBox(tabLoad);
+    m_comboLoadDll->setMinimumWidth(280);
+    m_comboLoadDll->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    layoutLoadPick->addWidget(m_comboLoadDll, 1);
+    m_btnCheckDllLoad = new QPushButton(QStringLiteral("检查本项"), tabLoad);
+    FitButtonText(m_btnCheckDllLoad);
+    layoutLoadPick->addWidget(m_btnCheckDllLoad);
+    layoutTabLoad->addLayout(layoutLoadPick);
+
+    QHBoxLayout* layoutLoadInfo = new QHBoxLayout();
+    m_lblLoadStatus = new QLabel(QStringLiteral("加载状态: 尚未执行预检"), tabLoad);
+    m_lblLoadApi = new QLabel(QStringLiteral("接口绑定: N/A"), tabLoad);
+    layoutLoadInfo->addWidget(m_lblLoadStatus);
+    layoutLoadInfo->addWidget(m_lblLoadApi);
+    layoutLoadInfo->addStretch(1);
+    layoutTabLoad->addLayout(layoutLoadInfo);
+
+    QGroupBox* grpExports = new QGroupBox("DLL 对外接口检查", tabLoad);
     QVBoxLayout* lExp = new QVBoxLayout(grpExports);
-    m_tblExports = new QTableWidget(0, 3, this);
+    m_tblExports = new QTableWidget(0, 3, tabLoad);
     m_tblExports->setHorizontalHeaderLabels({ "导出函数名", "Ordinal 序号", "匹配状态" });
     m_tblExports->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_tblExports->setEditTriggers(QAbstractItemView::NoEditTriggers);
     lExp->addWidget(m_tblExports);
 
-    splitterPeTables->addWidget(grpImports);
-    splitterPeTables->addWidget(grpExports);
+    layoutTabLoad->addWidget(grpExports, 1);
 
-    layoutTabPe->addLayout(layoutPeInfo);
-    layoutTabPe->addWidget(splitterPeTables, 1);
-
-    // Tab 1: Stress
+    // Tab 4: performance / memory / trajectory (navigation selects a dedicated view)
     QWidget* tabPerf = new QWidget(this);
     QVBoxLayout* layoutTabPerf = new QVBoxLayout(tabPerf);
-    QHBoxLayout* layoutPerfCtrl = new QHBoxLayout();
-
-    layoutPerfCtrl->addWidget(new QLabel("型号:", this));
+    m_lblPerfPageHint = new QLabel(
+        QStringLiteral("请先添加型号并完成编译，随后可选择已编译型号执行性能、内存和轨迹测试。"), tabPerf);
+    m_lblPerfPageHint->setWordWrap(true);
+    m_lblPerfPageHint->setProperty("pageHint", true);
+    layoutTabPerf->addWidget(m_lblPerfPageHint);
+    QHBoxLayout* layoutPerfModel = new QHBoxLayout();
+    layoutPerfModel->addWidget(new QLabel("型号:", tabPerf));
     m_comboStressModel = new QComboBox(this);
     m_comboStressModel->setMinimumWidth(180);
     m_comboStressModel->setSizeAdjustPolicy(QComboBox::AdjustToContents);
-    layoutPerfCtrl->addWidget(m_comboStressModel);
+    layoutPerfModel->addWidget(m_comboStressModel);
+    layoutPerfModel->addStretch(1);
+    layoutTabPerf->addLayout(layoutPerfModel);
 
-    layoutPerfCtrl->addWidget(new QLabel("重复次数:", this));
+    m_perfOptionsPanel = new QWidget(tabPerf);
+    QHBoxLayout* layoutPerfCtrl = new QHBoxLayout(m_perfOptionsPanel);
+    layoutPerfCtrl->setContentsMargins(0, 0, 0, 0);
+    layoutPerfCtrl->addWidget(new QLabel("重复次数:", m_perfOptionsPanel));
     m_spnSteps = new QSpinBox(this);
     m_spnSteps->setRange(100, 100000);
     m_spnSteps->setValue(10000);
@@ -329,10 +486,12 @@ MainWindow::MainWindow(QWidget* parent)
     m_btnRunStress = new QPushButton("执行性能压测", this);
     FitButtonText(m_btnRunStress);
     layoutPerfCtrl->addWidget(m_btnRunStress);
+    layoutPerfCtrl->addStretch(1);
+    layoutTabPerf->addWidget(m_perfOptionsPanel);
+
     m_btnRunTrajectory = new QPushButton("试跑并绘制轨迹", this);
     FitButtonText(m_btnRunTrajectory);
-    layoutPerfCtrl->addWidget(m_btnRunTrajectory);
-    layoutPerfCtrl->addStretch(1);
+    layoutTabPerf->addWidget(m_btnRunTrajectory, 0, Qt::AlignLeft);
 
     m_lblPerfSummary = new QLabel("压测汇总: 未执行压测", this);
     m_lblPerfSummary->setWordWrap(true);
@@ -356,13 +515,13 @@ MainWindow::MainWindow(QWidget* parent)
 
     QSplitter* splitterPerf = new QSplitter(Qt::Vertical, this);
     splitterPerf->addWidget(m_pChartViewer);
-    QWidget* trajPanel = new QWidget(this);
-    QVBoxLayout* trajLayout = new QVBoxLayout(trajPanel);
+    m_trajectoryPanel = new QWidget(this);
+    QVBoxLayout* trajLayout = new QVBoxLayout(m_trajectoryPanel);
     trajLayout->setContentsMargins(0, 0, 0, 0);
     trajLayout->addWidget(m_lblTrajOut);
-    QSplitter* splitterTraj = new QSplitter(Qt::Horizontal, trajPanel);
+    QSplitter* splitterTraj = new QSplitter(Qt::Horizontal, m_trajectoryPanel);
     splitterTraj->addWidget(m_pTrajectoryView);
-    QWidget* tblWrap = new QWidget(trajPanel);
+    QWidget* tblWrap = new QWidget(m_trajectoryPanel);
     QVBoxLayout* tblLayout = new QVBoxLayout(tblWrap);
     tblLayout->setContentsMargins(0, 0, 0, 0);
     tblLayout->addWidget(new QLabel(QStringLiteral("路径点经纬度"), tblWrap));
@@ -371,25 +530,26 @@ MainWindow::MainWindow(QWidget* parent)
     splitterTraj->setStretchFactor(0, 3);
     splitterTraj->setStretchFactor(1, 2);
     trajLayout->addWidget(splitterTraj, 1);
-    splitterPerf->addWidget(trajPanel);
+    splitterPerf->addWidget(m_trajectoryPanel);
     splitterPerf->setStretchFactor(0, 3);
     splitterPerf->setStretchFactor(1, 2);
 
-    layoutTabPerf->addLayout(layoutPerfCtrl);
     layoutTabPerf->addWidget(m_lblPerfSummary);
     layoutTabPerf->addWidget(splitterPerf, 1);
 
     // Tab 2: Multi-model
     QWidget* tabMultiModel = new QWidget(this);
     QVBoxLayout* layoutTabMultiModel = new QVBoxLayout(tabMultiModel);
-    QLabel* multiHint = new QLabel(
+    m_lblMultiModelPageHint = new QLabel(
         "在左侧配置并编译各型号后，在此设置并行实例数并一起跑。", this);
-    multiHint->setWordWrap(true);
-    layoutTabMultiModel->addWidget(multiHint);
+    m_lblMultiModelPageHint->setWordWrap(true);
+    m_lblMultiModelPageHint->setProperty("pageHint", true);
+    layoutTabMultiModel->addWidget(m_lblMultiModelPageHint);
 
     m_tblFleetCounts = new QTableWidget(0, 4, this);
     m_tblFleetCounts->setHorizontalHeaderLabels({ "名称", "模型包路径", "编译状态", "实例数" });
     m_tblFleetCounts->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_tblFleetCounts->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_tblFleetCounts->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_tblFleetCounts->setSelectionMode(QAbstractItemView::SingleSelection);
     m_tblFleetCounts->setMinimumHeight(160);
@@ -407,12 +567,18 @@ MainWindow::MainWindow(QWidget* parent)
     m_tblMultiModelResults = new QTableWidget(0, 5, this);
     m_tblMultiModelResults->setHorizontalHeaderLabels({ "型号[实例]", "随机参数", "返回码", "SEH", "详情" });
     m_tblMultiModelResults->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_tblMultiModelResults->setEditTriggers(QAbstractItemView::NoEditTriggers);
     layoutTabMultiModel->addWidget(m_lblMultiModelSummary);
     layoutTabMultiModel->addWidget(m_tblMultiModelResults, 1);
 
     // Tab 3: Multi-thread
     QWidget* tabMultiThr = new QWidget(this);
     QVBoxLayout* layoutTabMultiThr = new QVBoxLayout(tabMultiThr);
+    m_lblMultiThreadPageHint = new QLabel(
+        QStringLiteral("请先添加型号并完成编译；型号下拉框仅显示已编译型号。"), tabMultiThr);
+    m_lblMultiThreadPageHint->setWordWrap(true);
+    m_lblMultiThreadPageHint->setProperty("pageHint", true);
+    layoutTabMultiThr->addWidget(m_lblMultiThreadPageHint);
     QHBoxLayout* layoutThrCtrl = new QHBoxLayout();
 
     layoutThrCtrl->addWidget(new QLabel("型号:", this));
@@ -438,6 +604,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_tblMultiThreadResults = new QTableWidget(0, 5, this);
     m_tblMultiThreadResults->setHorizontalHeaderLabels({ "Thread", "随机参数", "返回码", "SEH", "详情" });
     m_tblMultiThreadResults->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_tblMultiThreadResults->setEditTriggers(QAbstractItemView::NoEditTriggers);
     layoutTabMultiThr->addWidget(m_lblMultiThreadSummary);
     layoutTabMultiThr->addWidget(m_tblMultiThreadResults, 1);
 
@@ -447,17 +614,65 @@ MainWindow::MainWindow(QWidget* parent)
     m_pReportBrowser = new QTextBrowser(this);
     layoutTabReport->addWidget(m_pReportBrowser);
 
-    m_pCentralTabs->addTab(tabPe, "静态 PE 分析");
-    m_pCentralTabs->addTab(tabPerf, "性能压测");
+    m_pCentralTabs->addTab(tabHeader, "头文件规范检查");
+    m_pCentralTabs->addTab(tabLib, "LIB 库文件检查");
+    m_pCentralTabs->addTab(tabPe, "DLL 文件与依赖检查");
+    m_pCentralTabs->addTab(tabLoad, "DLL 接口与加载检查");
+    m_pCentralTabs->addTab(tabPerf, "性能 / 内存 / 轨迹");
     m_pCentralTabs->addTab(tabMultiModel, "多型号并行");
-    m_pCentralTabs->addTab(tabMultiThr, "多线程测试");
+    m_pCentralTabs->addTab(tabMultiThr, "多线程稳定性");
     m_pCentralTabs->addTab(tabReport, "预检报告");
 
+    QWidget* workflowPage = new QWidget(this);
+    workflowPage->setObjectName(QStringLiteral("workflowPage"));
+    QVBoxLayout* workflowPageLayout = new QVBoxLayout(workflowPage);
+    workflowPageLayout->setContentsMargins(10, 10, 10, 10);
+    workflowPageLayout->setSpacing(12);
+
+    QLabel* emptyState = new QLabel(
+        QStringLiteral("<h2>开始预检</h2>"
+                       "<p>请先点击左侧“添加型号”。添加后将在这里依次显示：</p>"
+                       "<p><b>选择模型包 → 选择头文件 → 编写 UserMain → 编译 → 执行测试 → 查看报告</b></p>"),
+        workflowPage);
+    emptyState->setAlignment(Qt::AlignCenter);
+    emptyState->setWordWrap(true);
+    emptyState->setTextFormat(Qt::RichText);
+    emptyState->setMinimumHeight(260);
+    emptyState->setProperty("emptyWorkflow", true);
+    m_emptyWorkflowPanel = emptyState;
+
+    m_testSection = new QWidget(workflowPage);
+    m_testSection->setObjectName(QStringLiteral("testSection"));
+    QVBoxLayout* testSectionLayout = new QVBoxLayout(m_testSection);
+    testSectionLayout->setContentsMargins(0, 0, 0, 0);
+    testSectionLayout->setSpacing(10);
+    m_testSectionTitle = new QLabel(
+        QStringLiteral("测试工作区（请从左侧“测试导航”选择）"), m_testSection);
+    m_testSectionTitle->setProperty("pageSectionTitle", true);
+    testSectionLayout->addWidget(m_testSectionTitle);
+    m_pCentralTabs->setMinimumHeight(620);
+    m_pCentralTabs->tabBar()->hide();
+    testSectionLayout->addWidget(m_pCentralTabs);
+
+    workflowPageLayout->addWidget(m_emptyWorkflowPanel);
+    workflowPageLayout->addWidget(m_modelSetupPanel);
+    workflowPageLayout->addWidget(m_testSection);
+    workflowPageLayout->addStretch(1);
+
+    m_workflowScroll = new QScrollArea(this);
+    m_workflowScroll->setObjectName(QStringLiteral("workflowScroll"));
+    m_workflowScroll->setWidgetResizable(true);
+    m_workflowScroll->setFrameShape(QFrame::NoFrame);
+    m_workflowScroll->setWidget(workflowPage);
+
+    grpNavigation->setFixedWidth(205);
+    grpModels->setMinimumWidth(210);
+    grpModels->setMaximumWidth(270);
     splitterContent->addWidget(grpModels);
-    splitterContent->addWidget(m_pCentralTabs);
-    splitterContent->setStretchFactor(0, 2);
-    splitterContent->setStretchFactor(1, 3);
-    splitterContent->setSizes({ 520, 780 });
+    splitterContent->addWidget(m_workflowScroll);
+    splitterContent->setStretchFactor(0, 0);
+    splitterContent->setStretchFactor(1, 1);
+    splitterContent->setSizes({ 235, 1000 });
 
     m_pLogConsole = new LogConsoleWidget(this);
 
@@ -467,9 +682,17 @@ MainWindow::MainWindow(QWidget* parent)
     splitterMain->setStretchFactor(0, 4);
     splitterMain->setStretchFactor(1, 1);
 
-    rootLayout->addWidget(grpTop);
-    rootLayout->addLayout(layoutBadges);
-    rootLayout->addWidget(splitterMain, 1);
+    QWidget* mainWorkspace = new QWidget(centralWidget);
+    QVBoxLayout* workspaceLayout = new QVBoxLayout(mainWorkspace);
+    workspaceLayout->setContentsMargins(0, 0, 0, 0);
+    workspaceLayout->setSpacing(8);
+    workspaceLayout->addWidget(grpTop);
+    workspaceLayout->addLayout(layoutBadges);
+    workspaceLayout->addWidget(grpWorkflow);
+    workspaceLayout->addWidget(splitterMain, 1);
+
+    rootLayout->addWidget(grpNavigation);
+    rootLayout->addWidget(mainWorkspace, 1);
 
     // --- Connect Signals ---
     connect(m_btnRunPrecheck, &QPushButton::clicked, this, &MainWindow::runFullPrecheck);
@@ -477,7 +700,31 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_btnAddModel, &QPushButton::clicked, this, &MainWindow::addModel);
     connect(m_btnRemoveModel, &QPushButton::clicked, this, &MainWindow::removeModel);
     connect(m_listModels, &QListWidget::currentRowChanged, this, &MainWindow::onModelSelectionChanged);
+    connect(m_listModels, &QListWidget::itemClicked, this, [this](QListWidgetItem*) {
+        QSignalBlocker blocker(m_listTestNavigation);
+        m_listTestNavigation->setCurrentRow(-1);
+        updateWorkflowUi();
+        m_workflowScroll->ensureWidgetVisible(m_modelSetupPanel, 0, 10);
+    });
+    connect(m_listTestNavigation, &QListWidget::currentRowChanged,
+            this, &MainWindow::onTestNavigationChanged);
     connect(m_btnBrowseModelPackage, &QPushButton::clicked, this, &MainWindow::browseCurrentModelPackage);
+    connect(m_editModelPackage, &QLineEdit::editingFinished, this, [this]() {
+        if (m_currentModelIndex < 0
+            || m_currentModelIndex >= static_cast<int>(m_models.size())) return;
+        FleetModelEntry& entry = m_models[static_cast<size_t>(m_currentModelIndex)];
+        const QString entered = QDir::toNativeSeparators(m_editModelPackage->text().trimmed());
+        if (entry.packageDir != entered) {
+            entry.harness.reset();
+            entry.status = QStringLiteral("未编译");
+            m_latestFleetReport = FleetSessionReport();
+        }
+        saveEditorsToCurrentModel();
+        if (isModelPathValid(entry)) {
+            refreshCurrentModelHeaders();
+        }
+        updateWorkflowUi();
+    });
     connect(m_btnRefreshModelHeaders, &QPushButton::clicked, this, &MainWindow::refreshCurrentModelHeaders);
     connect(m_btnCompileCurrent, &QPushButton::clicked, this, &MainWindow::compileCurrentModel);
     connect(m_btnCompileAll, &QPushButton::clicked, this, &MainWindow::compileAllModels);
@@ -487,12 +734,32 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_btnRunTrajectory, &QPushButton::clicked, this, &MainWindow::runTrajectoryPreview);
     connect(m_btnRunMultiModel, &QPushButton::clicked, this, &MainWindow::runMultiModelTest);
     connect(m_btnRunMultiThread, &QPushButton::clicked, this, &MainWindow::runMultiThreadTest);
+    connect(m_btnCheckDllFile, &QPushButton::clicked, this, &MainWindow::runDllFileCheckOnly);
+    connect(m_btnCheckDllLoad, &QPushButton::clicked, this, &MainWindow::runDllLoadCheckOnly);
+    connect(m_btnCheckHeader, &QPushButton::clicked, this, &MainWindow::runHeaderCheckOnly);
+    connect(m_btnCheckLib, &QPushButton::clicked, this, &MainWindow::runLibCheckOnly);
+    connect(m_comboHeaderModel, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int) {
+                fillPackageFileSelector(m_comboHeaderModel, m_comboHeaderFile,
+                                        { QStringLiteral("*.h"), QStringLiteral("*.hpp") });
+            });
+    connect(m_comboLibModel, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int) {
+                fillPackageFileSelector(m_comboLibModel, m_comboLibFile,
+                                        { QStringLiteral("*.lib") });
+            });
     connect(m_comboPeModel, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onPeModelChanged);
     connect(m_comboPeDll, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onPeDllChanged);
+    connect(m_comboLoadModel, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onLoadModelChanged);
+    connect(m_comboLoadDll, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onLoadDllChanged);
 
+    m_listTestNavigation->setCurrentRow(-1);
     setEditorsEnabled(false);
+    updateWorkflowUi();
     applyDarkStyle();
     logMessage("INFO: 初始化完毕。请在左侧「型号与 UserMain」添加型号、配置包路径并编译，输出目录为 exe 旁 TestModel/<型号名>/。");
 }
@@ -614,17 +881,187 @@ bool MainWindow::requireSelectedModelCompiled(QComboBox* combo, int /*switchToTa
     return true;
 }
 
+bool MainWindow::isModelPathValid(const FleetModelEntry& entry) const {
+    const QString path = entry.packageDir.trimmed();
+    return !path.isEmpty() && QDir(path).exists();
+}
+
+bool MainWindow::isModelConfigured(const FleetModelEntry& entry) const {
+    return isModelPathValid(entry)
+        && !entry.headerPaths.isEmpty()
+        && !entry.userMainBody.trimmed().isEmpty();
+}
+
+bool MainWindow::isModelCompiled(const FleetModelEntry& entry) const {
+    return entry.harness && entry.harness->IsLoaded();
+}
+
+bool MainWindow::allModelsCompiled() const {
+    if (m_models.empty()) return false;
+    for (const FleetModelEntry& entry : m_models) {
+        if (!isModelCompiled(entry)) return false;
+    }
+    return true;
+}
+
 void MainWindow::setEditorsEnabled(bool on) {
     m_editModelName->setEnabled(on);
     m_editModelPackage->setEnabled(on);
     m_btnBrowseModelPackage->setEnabled(on);
-    m_btnRefreshModelHeaders->setEnabled(on);
-    m_listHarnessHeaders->setEnabled(on);
-    m_editUserMain->setEnabled(on);
-    m_tblRandomVars->setEnabled(on);
-    m_btnAddRandomVar->setEnabled(on);
-    m_btnRemoveRandomVar->setEnabled(on);
-    m_btnCompileCurrent->setEnabled(on);
+    if (!on) {
+        m_btnRefreshModelHeaders->setEnabled(false);
+        m_listHarnessHeaders->setEnabled(false);
+        m_editUserMain->setEnabled(false);
+        m_tblRandomVars->setEnabled(false);
+        m_btnAddRandomVar->setEnabled(false);
+        m_btnRemoveRandomVar->setEnabled(false);
+        m_btnCompileCurrent->setEnabled(false);
+    }
+}
+
+void MainWindow::updateWorkflowUi() {
+    const bool hasSelection = m_currentModelIndex >= 0
+        && m_currentModelIndex < static_cast<int>(m_models.size());
+    const FleetModelEntry* current = hasSelection
+        ? &m_models[static_cast<size_t>(m_currentModelIndex)] : nullptr;
+    const bool pathValid = current && isModelPathValid(*current);
+    const bool configured = current && isModelConfigured(*current);
+    const bool currentCompiled = current && isModelCompiled(*current);
+    const bool anyCompiled = std::any_of(m_models.begin(), m_models.end(),
+        [this](const FleetModelEntry& entry) { return isModelCompiled(entry); });
+    const bool everyCompiled = allModelsCompiled();
+    const bool hasPrecheck = !m_latestFleetReport.modelReports.empty()
+        && m_latestFleetReport.modelReports.size() == m_models.size();
+    const int navigationRow = m_listTestNavigation->currentRow();
+    const bool testPageSelected = navigationRow >= 0;
+    const bool testPageAccessible =
+        navigationRow == 9
+        || (navigationRow >= 0 && navigationRow <= 3 && !m_models.empty())
+        || (navigationRow >= 4 && navigationRow <= 8 && anyCompiled);
+    const bool navigationBlocked = testPageSelected && !testPageAccessible;
+
+    if (navigationBlocked) {
+        m_emptyWorkflowPanel->setText(navigationRow <= 3
+            ? QStringLiteral("<h2>请添加型号</h2>")
+            : QStringLiteral("<h2>请添加型号并编译</h2>"));
+    } else {
+        m_emptyWorkflowPanel->setText(
+            QStringLiteral("<h2>开始预检</h2>"
+                           "<p>请先点击左侧“添加型号”。添加后将在这里依次显示：</p>"
+                           "<p><b>选择模型包 → 选择头文件 → 编写 UserMain → 编译 → 执行测试 → 查看报告</b></p>"));
+    }
+
+    setEditorsEnabled(hasSelection);
+    m_emptyWorkflowPanel->setVisible(navigationBlocked || (!hasSelection && !testPageSelected));
+    m_modelSetupPanel->setVisible(hasSelection && !testPageSelected);
+    m_modelDetailPanel->setVisible(pathValid);
+    m_testSection->setVisible(testPageSelected && testPageAccessible);
+    m_btnRefreshModelHeaders->setEnabled(pathValid);
+    m_listHarnessHeaders->setEnabled(pathValid);
+    m_editUserMain->setEnabled(pathValid);
+    m_tblRandomVars->setEnabled(pathValid);
+    m_btnAddRandomVar->setEnabled(pathValid);
+    m_btnRemoveRandomVar->setEnabled(pathValid);
+    m_btnCompileCurrent->setEnabled(configured);
+
+    bool allConfigured = !m_models.empty();
+    for (const FleetModelEntry& entry : m_models) {
+        if (!isModelConfigured(entry)) {
+            allConfigured = false;
+            break;
+        }
+    }
+    m_btnCompileAll->setEnabled(allConfigured);
+    m_btnRunPrecheck->setEnabled(!m_models.empty());
+    m_btnExportReport->setEnabled(true);
+
+    m_comboStressModel->setEnabled(anyCompiled);
+    m_spnSteps->setEnabled(anyCompiled);
+    m_comboHz->setEnabled(anyCompiled);
+    m_btnRunStress->setEnabled(anyCompiled);
+    m_btnRunTrajectory->setEnabled(anyCompiled);
+    m_lblPerfPageHint->setVisible(!anyCompiled);
+    m_lblPerfPageHint->setText(m_models.empty()
+        ? QStringLiteral("请先添加型号并完成编译，才能执行性能、内存和轨迹测试。")
+        : QStringLiteral("当前没有已编译型号。请先在型号配置页完成编译。"));
+
+    m_tblFleetCounts->setEnabled(everyCompiled);
+    m_btnRunMultiModel->setEnabled(everyCompiled);
+    m_lblMultiModelPageHint->setVisible(!everyCompiled);
+    m_lblMultiModelPageHint->setText(m_models.empty()
+        ? QStringLiteral("请先添加型号并完成编译，才能执行多型号并行测试。")
+        : QStringLiteral("多型号并行要求所有已添加型号均编译成功。"));
+
+    m_comboThreadModel->setEnabled(anyCompiled);
+    m_spnThreadCount->setEnabled(anyCompiled);
+    m_btnRunMultiThread->setEnabled(anyCompiled);
+    m_lblMultiThreadPageHint->setVisible(!anyCompiled);
+    m_lblMultiThreadPageHint->setText(m_models.empty()
+        ? QStringLiteral("请先添加型号并完成编译，才能执行多线程稳定性测试。")
+        : QStringLiteral("当前没有已编译型号；型号下拉框只显示编译成功的型号。"));
+
+    if (hasSelection) {
+        if (pathValid) {
+            m_lblPathStageStatus->setText(
+                QStringLiteral("模型包路径有效。请继续选择头文件、编写 UserMain 并完成编译。"));
+            m_lblPathStageStatus->setProperty("pathValid", true);
+        } else {
+            m_lblPathStageStatus->setText(
+                QStringLiteral("步骤 2：请选择有效的模型包路径，随后将显示头文件和 UserMain 配置。"));
+            m_lblPathStageStatus->setProperty("pathValid", false);
+        }
+    } else {
+        m_lblPathStageStatus->setText(QStringLiteral("请先点击“添加型号”。"));
+        m_lblPathStageStatus->setProperty("pathValid", false);
+    }
+    m_lblPathStageStatus->style()->unpolish(m_lblPathStageStatus);
+    m_lblPathStageStatus->style()->polish(m_lblPathStageStatus);
+
+    int activeStep = 0;
+    QString summary = QStringLiteral("当前步骤：点击“添加型号”开始配置第三方模型。");
+    if (!m_models.empty()) {
+        activeStep = 1;
+        summary = QStringLiteral("当前步骤：为选中的型号选择有效模型包路径。");
+        if (pathValid) {
+            activeStep = 2;
+            summary = QStringLiteral("当前步骤：选择头文件、编写 UserMain，并配置随机变量。");
+        }
+        if (configured) {
+            activeStep = 3;
+            summary = QStringLiteral("当前步骤：编译当前型号；多型号时请确保全部型号编译成功。");
+        }
+        if (everyCompiled) {
+            activeStep = 4;
+            summary = hasPrecheck
+                ? QStringLiteral("可从左侧测试导航继续运行各测试项，或直接查看报告。")
+                : QStringLiteral("编译已完成：可从左侧进入测试项，也可执行一键预检。");
+        } else if (currentCompiled) {
+            summary = QStringLiteral("当前型号已编译；请继续编译其余型号，或点击“编译全部型号”。");
+        }
+        if (hasPrecheck) {
+            activeStep = 5;
+            summary = QStringLiteral("预检已完成：可查看测试明细、运行专项测试并导出报告。");
+        }
+    }
+    m_lblWorkflowSummary->setText(summary);
+    for (int i = 0; i < static_cast<int>(m_workflowSteps.size()); ++i) {
+        QLabel* label = m_workflowSteps[static_cast<size_t>(i)];
+        const char* state = i < activeStep ? "done" : (i == activeStep ? "active" : "pending");
+        label->setProperty("stepState", state);
+        label->style()->unpolish(label);
+        label->style()->polish(label);
+    }
+
+    if (m_models.empty()) {
+        m_lblPePageHint->setText(QStringLiteral("请先添加型号。"));
+        m_lblPePageHint->show();
+    } else if (m_latestFleetReport.modelReports.empty()) {
+        m_lblPePageHint->setText(
+            QStringLiteral("已自动列出型号包中的 DLL。点击顶部“一键预检全部型号”后可查看文件结构与依赖检查结果。"));
+        m_lblPePageHint->show();
+    } else {
+        m_lblPePageHint->hide();
+    }
 }
 
 void MainWindow::saveEditorsToCurrentModel() {
@@ -661,6 +1098,7 @@ void MainWindow::loadEditorsFromModel(int index) {
         m_lblHarnessStatus->setText("Harness: 未编译");
         setEditorsEnabled(false);
         m_blockModelUi = false;
+        updateWorkflowUi();
         return;
     }
 
@@ -699,6 +1137,7 @@ void MainWindow::loadEditorsFromModel(int index) {
     }
 
     m_blockModelUi = false;
+    updateWorkflowUi();
 }
 
 void MainWindow::refreshModelListUi() {
@@ -759,7 +1198,9 @@ void MainWindow::refreshModelSelectors() {
         combo->clear();
         for (int i = 0; i < static_cast<int>(m_models.size()); ++i) {
             const FleetModelEntry& e = m_models[static_cast<size_t>(i)];
-            combo->addItem(QString("%1 (%2)").arg(e.name, e.status), i);
+            if (isModelCompiled(e)) {
+                combo->addItem(QString("%1 (已编译)").arg(e.name), i);
+            }
         }
         int restore = -1;
         for (int i = 0; i < combo->count(); ++i) {
@@ -780,89 +1221,31 @@ void MainWindow::refreshModelSelectors() {
 }
 
 void MainWindow::refreshPeSelectors() {
-    if (!m_comboPeModel || !m_comboPeDll) return;
-
-    const int prevModel = m_comboPeModel->currentData().toInt();
-    QString prevDllPath;
-    if (m_comboPeDll->currentIndex() >= 0) {
-        prevDllPath = m_comboPeDll->currentData().toString();
-    }
-
-    {
-        QSignalBlocker b(m_comboPeModel);
-        m_comboPeModel->clear();
-        if (!m_latestFleetReport.modelReports.empty()) {
-            for (int i = 0; i < static_cast<int>(m_latestFleetReport.modelReports.size()); ++i) {
-                const auto& m = m_latestFleetReport.modelReports[static_cast<size_t>(i)];
-                QString name = m.modelName.empty() ? QString("型号%1").arg(i + 1) : qUtf8(m.modelName);
-                m_comboPeModel->addItem(name, i);
-            }
-        } else if (!m_latestDualReport.dllReports.empty()) {
-            QString name = m_latestDualReport.modelName.empty()
-                ? QStringLiteral("当前包") : qUtf8(m_latestDualReport.modelName);
-            m_comboPeModel->addItem(name, 0);
-        } else if (!m_latestReport.peReport.filePath.empty() || !m_latestReport.dllPath.empty()) {
-            m_comboPeModel->addItem(QStringLiteral("当前 DLL"), 0);
+    auto refillModels = [this](QComboBox* combo) {
+        const int previous = combo->currentData().toInt();
+        QSignalBlocker blocker(combo);
+        combo->clear();
+        for (int i = 0; i < static_cast<int>(m_models.size()); ++i) {
+            combo->addItem(m_models[static_cast<size_t>(i)].name, i);
         }
-        int restore = -1;
-        for (int i = 0; i < m_comboPeModel->count(); ++i) {
-            if (m_comboPeModel->itemData(i).toInt() == prevModel) {
-                restore = i;
-                break;
-            }
-        }
-        if (restore >= 0) m_comboPeModel->setCurrentIndex(restore);
-        else if (m_comboPeModel->count() > 0) m_comboPeModel->setCurrentIndex(0);
-    }
+        int restore = combo->findData(previous);
+        combo->setCurrentIndex(restore >= 0 ? restore : (combo->count() > 0 ? 0 : -1));
+    };
 
+    refillModels(m_comboHeaderModel);
+    refillModels(m_comboLibModel);
+    refillModels(m_comboPeModel);
+    refillModels(m_comboLoadModel);
+    fillPackageFileSelector(m_comboHeaderModel, m_comboHeaderFile,
+                            { QStringLiteral("*.h"), QStringLiteral("*.hpp") });
+    fillPackageFileSelector(m_comboLibModel, m_comboLibFile,
+                            { QStringLiteral("*.lib") });
     onPeModelChanged(m_comboPeModel->currentIndex());
-
-    if (!prevDllPath.isEmpty()) {
-        for (int i = 0; i < m_comboPeDll->count(); ++i) {
-            if (m_comboPeDll->itemData(i).toString() == prevDllPath) {
-                QSignalBlocker b(m_comboPeDll);
-                m_comboPeDll->setCurrentIndex(i);
-                break;
-            }
-        }
-        onPeDllChanged(m_comboPeDll->currentIndex());
-    }
+    onLoadModelChanged(m_comboLoadModel->currentIndex());
 }
 
 void MainWindow::onPeModelChanged(int /*index*/) {
-    if (!m_comboPeDll) return;
-    QSignalBlocker b(m_comboPeDll);
-    m_comboPeDll->clear();
-
-    if (!m_latestFleetReport.modelReports.empty()) {
-        int mi = m_comboPeModel->currentData().toInt();
-        if (mi >= 0 && mi < static_cast<int>(m_latestFleetReport.modelReports.size())) {
-            const auto& m = m_latestFleetReport.modelReports[static_cast<size_t>(mi)];
-            for (const auto& d : m.dllReports) {
-                QString path = qUtf8(d.dllPath.empty() ? d.peReport.filePath : d.dllPath);
-                QString cfg = qUtf8(d.buildConfig);
-                QString label = path;
-                if (!cfg.isEmpty()) label = QString("[%1] %2").arg(cfg, path);
-                m_comboPeDll->addItem(label, path);
-            }
-        }
-    } else if (!m_latestDualReport.dllReports.empty()) {
-        for (const auto& d : m_latestDualReport.dllReports) {
-            QString path = qUtf8(d.dllPath.empty() ? d.peReport.filePath : d.dllPath);
-            QString cfg = qUtf8(d.buildConfig);
-            QString label = path;
-            if (!cfg.isEmpty()) label = QString("[%1] %2").arg(cfg, path);
-            m_comboPeDll->addItem(label, path);
-        }
-    } else if (!m_latestReport.peReport.filePath.empty() || !m_latestReport.dllPath.empty()) {
-        QString path = qUtf8(m_latestReport.dllPath.empty()
-            ? m_latestReport.peReport.filePath : m_latestReport.dllPath);
-        m_comboPeDll->addItem(path, path);
-    }
-
-    if (m_comboPeDll->count() > 0) {
-        m_comboPeDll->setCurrentIndex(0);
-    }
+    fillDllSelector(m_comboPeModel, m_comboPeDll);
     onPeDllChanged(m_comboPeDll->currentIndex());
 }
 
@@ -870,6 +1253,133 @@ void MainWindow::onPeDllChanged(int /*index*/) {
     const CombinedPrecheckReport* rep = selectedPeDllReport();
     if (rep) {
         updatePeView(rep->peReport);
+    } else {
+        m_lblPeArch->setText(QStringLiteral("CPU 架构: 等待执行预检"));
+        m_lblPeCrt->setText(QStringLiteral("运行库类型: 等待执行预检"));
+        m_tblImports->setRowCount(0);
+    }
+}
+
+void MainWindow::fillDllSelector(QComboBox* modelCombo, QComboBox* dllCombo) {
+    if (!modelCombo || !dllCombo) return;
+    const QString previous = dllCombo->currentData().toString();
+    const int modelIndex = modelCombo->currentData().toInt();
+    QStringList dllPaths;
+
+    if (modelIndex >= 0 && modelIndex < static_cast<int>(m_models.size())) {
+        const QString packageDir = m_models[static_cast<size_t>(modelIndex)].packageDir;
+        if (!packageDir.isEmpty() && QDir(packageDir).exists()) {
+            QDirIterator it(packageDir, QStringList() << QStringLiteral("*.dll"),
+                QDir::Files, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                dllPaths.push_back(QDir::toNativeSeparators(QFileInfo(it.next()).absoluteFilePath()));
+            }
+        }
+    }
+    if (modelIndex >= 0
+        && modelIndex < static_cast<int>(m_latestFleetReport.modelReports.size())) {
+        const auto& report = m_latestFleetReport.modelReports[static_cast<size_t>(modelIndex)];
+        for (const auto& dll : report.dllReports) {
+            const QString path = qUtf8(dll.dllPath.empty() ? dll.peReport.filePath : dll.dllPath);
+            if (!path.isEmpty() && !dllPaths.contains(path, Qt::CaseInsensitive)) {
+                dllPaths.push_back(path);
+            }
+        }
+    }
+
+    dllPaths.removeDuplicates();
+    dllPaths.sort(Qt::CaseInsensitive);
+    QSignalBlocker blocker(dllCombo);
+    dllCombo->clear();
+    for (const QString& path : dllPaths) {
+        dllCombo->addItem(path, path);
+    }
+    int restore = dllCombo->findData(previous);
+    dllCombo->setCurrentIndex(restore >= 0 ? restore : (dllCombo->count() > 0 ? 0 : -1));
+}
+
+void MainWindow::fillPackageFileSelector(
+    QComboBox* modelCombo, QComboBox* fileCombo, const QStringList& nameFilters) {
+    if (!modelCombo || !fileCombo) return;
+    const QString previous = fileCombo->currentData().toString();
+    const int modelIndex = modelCombo->currentData().toInt();
+    QStringList paths;
+    if (modelIndex >= 0 && modelIndex < static_cast<int>(m_models.size())) {
+        const QString packageDir = m_models[static_cast<size_t>(modelIndex)].packageDir;
+        if (!packageDir.isEmpty() && QDir(packageDir).exists()) {
+            QDirIterator it(packageDir, nameFilters, QDir::Files, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                paths.push_back(QDir::toNativeSeparators(QFileInfo(it.next()).absoluteFilePath()));
+            }
+        }
+    }
+    paths.removeDuplicates();
+    paths.sort(Qt::CaseInsensitive);
+    QSignalBlocker blocker(fileCombo);
+    fileCombo->clear();
+    for (const QString& path : paths) fileCombo->addItem(path, path);
+    const int restore = fileCombo->findData(previous);
+    fileCombo->setCurrentIndex(restore >= 0 ? restore : (fileCombo->count() > 0 ? 0 : -1));
+}
+
+const CombinedPrecheckReport* MainWindow::findDllReport(
+    int modelIndex, const QString& dllPath) const {
+    auto normalizedPath = [](const QString& path) {
+        QFileInfo info(path);
+        QString normalized = info.canonicalFilePath();
+        if (normalized.isEmpty()) normalized = info.absoluteFilePath();
+        return QDir::toNativeSeparators(QDir::cleanPath(normalized));
+    };
+    const QString wantedPath = normalizedPath(dllPath);
+    auto matches = [&wantedPath, &normalizedPath](const CombinedPrecheckReport& report) {
+        const QString path = qUtf8(report.dllPath.empty()
+            ? report.peReport.filePath : report.dllPath);
+        return normalizedPath(path).compare(wantedPath, Qt::CaseInsensitive) == 0;
+    };
+    if (matches(m_latestReport)) return &m_latestReport;
+    if (modelIndex >= 0
+        && modelIndex < static_cast<int>(m_latestFleetReport.modelReports.size())) {
+        const auto& model = m_latestFleetReport.modelReports[static_cast<size_t>(modelIndex)];
+        for (const auto& report : model.dllReports) {
+            if (matches(report)) return &report;
+        }
+    }
+    for (const auto& report : m_latestDualReport.dllReports) {
+        if (matches(report)) return &report;
+    }
+    return nullptr;
+}
+
+void MainWindow::onLoadModelChanged(int /*index*/) {
+    fillDllSelector(m_comboLoadModel, m_comboLoadDll);
+    onLoadDllChanged(m_comboLoadDll->currentIndex());
+}
+
+void MainWindow::onLoadDllChanged(int /*index*/) {
+    const int modelIndex = m_comboLoadModel->currentData().toInt();
+    const QString dllPath = m_comboLoadDll->currentData().toString();
+    const CombinedPrecheckReport* report = findDllReport(modelIndex, dllPath);
+    m_tblExports->setRowCount(0);
+    if (!report) {
+        m_lblLoadStatus->setText(QStringLiteral("加载状态: 等待执行预检"));
+        m_lblLoadApi->setText(QStringLiteral("接口绑定: 等待执行预检"));
+        return;
+    }
+
+    m_lblLoadStatus->setText(report->loadReport.isLoaded
+        ? QStringLiteral("加载状态: 成功")
+        : QStringLiteral("加载状态: 失败"));
+    m_lblLoadApi->setText(QStringLiteral("接口绑定: 成功 %1 个，缺失 %2 个")
+        .arg(report->loadReport.boundSymbolCount)
+        .arg(report->loadReport.missingSymbolCount));
+    for (const auto& symbol : report->peReport.exportedSymbols) {
+        const int row = m_tblExports->rowCount();
+        m_tblExports->insertRow(row);
+        m_tblExports->setItem(row, 0, new QTableWidgetItem(qUtf8(symbol.name)));
+        m_tblExports->setItem(row, 1, new QTableWidgetItem(QString::number(symbol.ordinal)));
+        m_tblExports->setItem(row, 2,
+            new QTableWidgetItem(symbol.isRequiredInterface ? QStringLiteral("必需接口")
+                                                           : QStringLiteral("普通导出")));
     }
 }
 
@@ -877,39 +1387,15 @@ const CombinedPrecheckReport* MainWindow::selectedPeDllReport() const {
     if (!m_comboPeModel || !m_comboPeDll || m_comboPeDll->currentIndex() < 0) {
         return nullptr;
     }
-    const QString wantPath = m_comboPeDll->currentData().toString();
-
-    auto matchPath = [&](const CombinedPrecheckReport& d) -> bool {
-        QString path = qUtf8(d.dllPath.empty() ? d.peReport.filePath : d.dllPath);
-        return path == wantPath;
-    };
-
-    if (!m_latestFleetReport.modelReports.empty()) {
-        int mi = m_comboPeModel->currentData().toInt();
-        if (mi >= 0 && mi < static_cast<int>(m_latestFleetReport.modelReports.size())) {
-            const auto& m = m_latestFleetReport.modelReports[static_cast<size_t>(mi)];
-            for (const auto& d : m.dllReports) {
-                if (matchPath(d)) return &d;
-            }
-            if (!m.dllReports.empty()) return &m.dllReports.front();
-        }
-        return nullptr;
-    }
-    if (!m_latestDualReport.dllReports.empty()) {
-        for (const auto& d : m_latestDualReport.dllReports) {
-            if (matchPath(d)) return &d;
-        }
-        return &m_latestDualReport.dllReports.front();
-    }
-    if (!m_latestReport.peReport.filePath.empty() || !m_latestReport.dllPath.empty()) {
-        return &m_latestReport;
-    }
-    return nullptr;
+    return findDllReport(m_comboPeModel->currentData().toInt(),
+                         m_comboPeDll->currentData().toString());
 }
 
 void MainWindow::refreshReportBrowser() {
     if (!m_pReportBrowser) return;
-    if (!m_latestFleetReport.modelReports.empty()) {
+    if (m_showSingleItemReport) {
+        m_pReportBrowser->setHtml(qUtf8(ReportGenerator::GenerateHtml(m_latestReport)));
+    } else if (!m_latestFleetReport.modelReports.empty()) {
         m_pReportBrowser->setHtml(qUtf8(ReportGenerator::GenerateFleetHtml(m_latestFleetReport)));
     } else {
         m_pReportBrowser->setHtml(qUtf8(ReportGenerator::GenerateHtml(m_latestReport)));
@@ -921,6 +1407,9 @@ void MainWindow::refreshFleetCountTable() {
     m_tblFleetCounts->setRowCount(0);
     for (int i = 0; i < static_cast<int>(m_models.size()); ++i) {
         const FleetModelEntry& e = m_models[static_cast<size_t>(i)];
+        if (!isModelCompiled(e)) {
+            continue;
+        }
         int row = m_tblFleetCounts->rowCount();
         m_tblFleetCounts->insertRow(row);
         m_tblFleetCounts->setItem(row, 0, new QTableWidgetItem(e.name));
@@ -943,8 +1432,53 @@ void MainWindow::onFleetCountChanged(int value) {
     m_models[static_cast<size_t>(idx)].instanceCount = value;
 }
 
+void MainWindow::onTestNavigationChanged(int row) {
+    if (row < 0 || row >= m_listTestNavigation->count()) {
+        m_testSection->hide();
+        return;
+    }
+
+    int tabIndex = 0;
+    if (row <= 3) {
+        tabIndex = row;
+    } else if (row <= 6) {
+        tabIndex = 4;
+    } else {
+        tabIndex = row - 2;
+    }
+
+    if (row == 9) {
+        refreshReportBrowser();
+    } else if (row <= 3) {
+        refreshPeSelectors();
+    }
+    m_testSectionTitle->setText(
+        QStringLiteral("测试工作区 — %1").arg(m_listTestNavigation->item(row)->text()));
+
+    if (row >= 4 && row <= 6) {
+        const bool trajectoryMode = row == 6;
+        m_perfOptionsPanel->setVisible(!trajectoryMode);
+        m_btnRunTrajectory->setVisible(trajectoryMode);
+        m_pChartViewer->setVisible(!trajectoryMode);
+        m_trajectoryPanel->setVisible(trajectoryMode);
+        m_lblPerfSummary->setVisible(!trajectoryMode);
+        if (!trajectoryMode) {
+            m_pChartViewer->SetCurrentChart(row == 4 ? 0 : 1);
+            m_btnRunStress->setText(row == 4
+                ? QStringLiteral("执行性能压测")
+                : QStringLiteral("执行内存监测"));
+            FitButtonText(m_btnRunStress);
+        }
+    }
+
+    m_pCentralTabs->setCurrentIndex(tabIndex);
+    updateWorkflowUi();
+    m_workflowScroll->verticalScrollBar()->setValue(0);
+}
+
 void MainWindow::addModel() {
     saveEditorsToCurrentModel();
+    m_latestFleetReport = FleetSessionReport();
 
     FleetModelEntry entry;
     entry.name = QStringLiteral("model%1").arg(m_models.size() + 1);
@@ -968,6 +1502,7 @@ void MainWindow::removeModel() {
     }
     QString name = m_models[static_cast<size_t>(row)].name;
     m_models.erase(m_models.begin() + row);
+    m_latestFleetReport = FleetSessionReport();
     m_currentModelIndex = -1;
     refreshModelListUi();
     logMessage(QString("INFO: 已删除型号「%1」").arg(name));
@@ -975,9 +1510,14 @@ void MainWindow::removeModel() {
 
 void MainWindow::onModelSelectionChanged() {
     if (m_blockModelUi) return;
+    {
+        QSignalBlocker blocker(m_listTestNavigation);
+        m_listTestNavigation->setCurrentRow(-1);
+    }
     saveEditorsToCurrentModel();
     int row = m_listModels->currentRow();
     loadEditorsFromModel(row);
+    m_workflowScroll->ensureWidgetVisible(m_modelSetupPanel, 0, 10);
 }
 
 void MainWindow::browseCurrentModelPackage() {
@@ -987,6 +1527,12 @@ void MainWindow::browseCurrentModelPackage() {
     if (dir.isEmpty()) return;
 
     dir = QDir::toNativeSeparators(dir);
+    FleetModelEntry& entry = m_models[static_cast<size_t>(m_currentModelIndex)];
+    if (entry.packageDir != dir) {
+        entry.harness.reset();
+        entry.status = QStringLiteral("未编译");
+        m_latestFleetReport = FleetSessionReport();
+    }
     m_editModelPackage->setText(dir);
     if (m_editModelName->text().trimmed().isEmpty()
         || m_editModelName->text().startsWith(QStringLiteral("model"))) {
@@ -995,6 +1541,7 @@ void MainWindow::browseCurrentModelPackage() {
     saveEditorsToCurrentModel();
     refreshCurrentModelHeaders();
     refreshModelListUi();
+    updateWorkflowUi();
 }
 
 void MainWindow::refreshCurrentModelHeaders() {
@@ -1028,6 +1575,7 @@ void MainWindow::refreshCurrentModelHeaders() {
     }
     saveEditorsToCurrentModel();
     logMessage(QString("INFO: 型号「%1」头文件列表已刷新，共 %2 个").arg(entry.name).arg(n));
+    updateWorkflowUi();
 }
 
 UserHarnessConfig MainWindow::buildHarnessConfig(const FleetModelEntry& entry, int index) const {
@@ -1225,9 +1773,6 @@ CombinedPrecheckReport MainWindow::runBuildPrecheck(const std::string& dllPath, 
         logMessage("WARN: DLL 加载失败: " + qDecodeLog(report.loadReport.errorLog));
     } else {
         logMessage("INFO: DLL 已加载（动态调用请在「型号与 UserMain」中编写 UserMain）");
-        report.trajReport.overallPass = true;
-        report.trajReport.warnings.push_back("轨迹校验功能已移除；请在 UserMain 中自行驱动模型");
-        report.perfReport.realtimeVerdict = "PASS";
     }
 
     report.overallPass = report.peReport.overallPass && report.loadReport.isLoaded;
@@ -1278,7 +1823,7 @@ DualBuildPrecheckReport MainWindow::precheckOneModel(const FleetModelEntry& entr
     logMessage("INFO: 阶段 2/3: LIB 库预检 (" + QString::number(pkgFiles.allLibFiles.size()) + " 个)...");
     for (const auto& lPath : pkgFiles.allLibFiles) {
         logMessage(" -> 预检 LIB 库: " + qUtf8(lPath));
-        LibAnalysisReport lRep = LibAnalyzer::AnalyzeLib(lPath, {});
+        LibAnalysisReport lRep = LibAnalyzer::AnalyzeLib(lPath);
         for (const auto& msg : lRep.logMessages) {
             logMessage(qDecodeLog(msg));
         }
@@ -1334,6 +1879,116 @@ DualBuildPrecheckReport MainWindow::precheckOneModel(const FleetModelEntry& entr
     return dual;
 }
 
+void MainWindow::runHeaderCheckOnly() {
+    const QString path = m_comboHeaderFile->currentData().toString();
+    if (path.isEmpty()) {
+        m_lblHeaderResult->setText(QStringLiteral("检查结果: 当前型号包中未找到头文件"));
+        return;
+    }
+    if (!m_showSingleItemReport) m_latestReport = CombinedPrecheckReport();
+    m_showSingleItemReport = true;
+    m_latestReport.headerPath = qToUtf8(path);
+    m_latestReport.timestamp = qToUtf8(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
+    m_latestReport.headerReport = HeaderAnalyzer::AnalyzeHeader(qToUtf8(path));
+    const auto& report = m_latestReport.headerReport;
+    m_lblHeaderResult->setText(
+        QString("检查结果: %1 | 编码: %2 | extern \"C\": %3 | 导出声明: %4")
+            .arg(report.overallPass ? QStringLiteral("PASS") : QStringLiteral("FAIL"))
+            .arg(qUtf8(report.encoding))
+            .arg(report.hasExternC ? QStringLiteral("有") : QStringLiteral("无"))
+            .arg(report.hasDeclspec ? QStringLiteral("有") : QStringLiteral("无")));
+    m_tblHeaderFunctions->setRowCount(0);
+    for (const auto& function : report.functionDecls) {
+        const int row = m_tblHeaderFunctions->rowCount();
+        m_tblHeaderFunctions->insertRow(row);
+        m_tblHeaderFunctions->setItem(row, 0, new QTableWidgetItem(qUtf8(function.name)));
+        m_tblHeaderFunctions->setItem(row, 1, new QTableWidgetItem(qUtf8(function.fullDeclaration)));
+    }
+    refreshReportBrowser();
+    logMessage(QStringLiteral("SUCCESS: 头文件规范检查完成：%1").arg(path));
+}
+
+void MainWindow::runLibCheckOnly() {
+    const QString path = m_comboLibFile->currentData().toString();
+    if (path.isEmpty()) {
+        m_lblLibResult->setText(QStringLiteral("检查结果: 当前型号包中未找到 LIB 文件"));
+        return;
+    }
+    if (!m_showSingleItemReport) m_latestReport = CombinedPrecheckReport();
+    m_showSingleItemReport = true;
+    m_latestReport.libPath = qToUtf8(path);
+    m_latestReport.timestamp = qToUtf8(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
+    m_latestReport.libReport = LibAnalyzer::AnalyzeLib(qToUtf8(path));
+    const auto& report = m_latestReport.libReport;
+    m_lblLibResult->setText(
+        QString("检查结果: %1 | 架构: %2 | 类型: %3 | 缺少符号: %4")
+            .arg(report.overallPass ? QStringLiteral("PASS") : QStringLiteral("FAIL"))
+            .arg(qUtf8(report.architecture))
+            .arg(qUtf8(report.libType))
+            .arg(report.missingSymbols.size()));
+    m_tblLibSymbols->setRowCount(0);
+    for (const auto& symbol : report.foundSymbols) {
+        const int row = m_tblLibSymbols->rowCount();
+        m_tblLibSymbols->insertRow(row);
+        m_tblLibSymbols->setItem(row, 0, new QTableWidgetItem(qUtf8(symbol)));
+    }
+    refreshReportBrowser();
+    logMessage(QStringLiteral("SUCCESS: LIB 库文件检查完成：%1").arg(path));
+}
+
+void MainWindow::runDllFileCheckOnly() {
+    const int modelIndex = m_comboPeModel->currentData().toInt();
+    const QString dllPath = m_comboPeDll->currentData().toString();
+    if (modelIndex < 0 || modelIndex >= static_cast<int>(m_models.size()) || dllPath.isEmpty()) {
+        m_lblPePageHint->setText(QStringLiteral("当前型号包中未找到可检查的 DLL。"));
+        m_lblPePageHint->show();
+        return;
+    }
+
+    const FleetModelEntry& model = m_models[static_cast<size_t>(modelIndex)];
+    if (!m_showSingleItemReport) m_latestReport = CombinedPrecheckReport();
+    if (m_latestReport.dllPath != qToUtf8(dllPath)) {
+        m_latestReport.peReport = PeAnalysisReport();
+        m_latestReport.loadReport = LoadResult();
+    }
+    m_showSingleItemReport = true;
+    m_latestReport.dllPath = qToUtf8(dllPath);
+    m_latestReport.timestamp = qToUtf8(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
+    m_latestReport.peReport = PeAnalyzer::AnalyzeDll(
+        qToUtf8(dllPath), { qToUtf8(model.packageDir) }, {});
+    m_latestReport.overallPass = m_latestReport.peReport.overallPass;
+    updatePeView(m_latestReport.peReport);
+    m_lblPePageHint->hide();
+    refreshReportBrowser();
+    logMessage(QStringLiteral("SUCCESS: DLL 文件与依赖检查完成：%1").arg(dllPath));
+}
+
+void MainWindow::runDllLoadCheckOnly() {
+    const int modelIndex = m_comboLoadModel->currentData().toInt();
+    const QString dllPath = m_comboLoadDll->currentData().toString();
+    if (modelIndex < 0 || modelIndex >= static_cast<int>(m_models.size()) || dllPath.isEmpty()) {
+        m_lblLoadPageHint->setText(QStringLiteral("当前型号包中未找到可检查的 DLL。"));
+        m_lblLoadPageHint->show();
+        return;
+    }
+
+    const FleetModelEntry& model = m_models[static_cast<size_t>(modelIndex)];
+    if (!m_showSingleItemReport) m_latestReport = CombinedPrecheckReport();
+    m_showSingleItemReport = true;
+    m_latestReport.dllPath = qToUtf8(dllPath);
+    m_latestReport.timestamp = qToUtf8(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
+    m_latestReport.peReport = PeAnalyzer::AnalyzeDll(
+        qToUtf8(dllPath), { qToUtf8(model.packageDir) }, {});
+    m_latestReport.loadReport = m_dllLoader.Load(
+        qToUtf8(dllPath), InterfaceMapping::DefaultSingleton());
+    m_latestReport.overallPass =
+        m_latestReport.peReport.overallPass && m_latestReport.loadReport.isLoaded;
+    onLoadDllChanged(m_comboLoadDll->currentIndex());
+    m_lblLoadPageHint->hide();
+    refreshReportBrowser();
+    logMessage(QStringLiteral("SUCCESS: DLL 接口与加载检查完成：%1").arg(dllPath));
+}
+
 void MainWindow::runFullPrecheck() {
     saveEditorsToCurrentModel();
     if (m_models.empty()) {
@@ -1341,36 +1996,12 @@ void MainWindow::runFullPrecheck() {
         return;
     }
 
-    for (const auto& e : m_models) {
-        if (e.packageDir.trimmed().isEmpty() || !QDir(e.packageDir).exists()) {
-            QMessageBox::warning(this, "警告",
-                QString("型号「%1」尚未设置有效的模型包路径").arg(e.name));
-            return;
-        }
-    }
-
+    m_showSingleItemReport = false;
     logMessage("================================================================================");
     logMessage(QString("INFO: 启动全部型号一键预检（共 %1 个型号）...").arg(m_models.size()));
 
-    // 保留已跑过的压测/并行结果，避免一键预检后矩阵丢失这些行
-    const auto keepMultiModel = m_latestFleetReport.multiModelReport;
-    const auto keepMultiThread = m_latestFleetReport.multiThreadReport;
-    const auto keepPerf = m_latestFleetReport.perfReport;
-
     m_latestFleetReport = FleetSessionReport();
     m_latestFleetReport.timestamp = qToUtf8(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
-    m_latestFleetReport.multiModelReport = keepMultiModel;
-    m_latestFleetReport.multiThreadReport = keepMultiThread;
-    m_latestFleetReport.perfReport = keepPerf;
-    if (keepPerf.realtimeVerdict.empty() && !m_latestReport.perfReport.realtimeVerdict.empty()) {
-        m_latestFleetReport.perfReport = m_latestReport.perfReport;
-    }
-    if (keepMultiThread.verdict.empty() && !m_latestReport.multiThreadReport.verdict.empty()) {
-        m_latestFleetReport.multiThreadReport = m_latestReport.multiThreadReport;
-    }
-    if (keepMultiModel.verdict.empty() && !m_latestReport.multiModelReport.verdict.empty()) {
-        m_latestFleetReport.multiModelReport = m_latestReport.multiModelReport;
-    }
 
     int passedModels = 0;
     for (size_t i = 0; i < m_models.size(); ++i) {
@@ -1381,7 +2012,133 @@ void MainWindow::runFullPrecheck() {
         m_latestDualReport = one;
     }
 
+    std::vector<int> compiledIndexes;
+    for (int i = 0; i < static_cast<int>(m_models.size()); ++i) {
+        if (isModelCompiled(m_models[static_cast<size_t>(i)])) {
+            compiledIndexes.push_back(i);
+        } else {
+            logMessage(QString("INFO: 型号「%1」未编译，跳过性能、内存、轨迹和并发测试")
+                .arg(m_models[static_cast<size_t>(i)].name));
+        }
+    }
+
+    bool firstPerf = true;
+    double weightedTimeSum = 0.0;
+    for (int modelIndex : compiledIndexes) {
+        FleetModelEntry& model = m_models[static_cast<size_t>(modelIndex)];
+        PerfProfileReport perf;
+        PerfProfilerWorker worker(model.harness.get(), m_spnSteps->value(),
+                                  m_comboHz->currentData().toDouble(),
+                                  static_cast<uint32_t>(modelIndex + 1));
+        connect(&worker, &PerfProfilerWorker::logMessage, this, &MainWindow::logMessage);
+        connect(&worker, &PerfProfilerWorker::finished, this,
+                [&perf](const PerfProfileReport& report) { perf = report; });
+        worker.process();
+
+        if (firstPerf) {
+            m_latestFleetReport.perfReport = perf;
+            weightedTimeSum = perf.avgTimeMs * perf.completedSteps;
+            firstPerf = false;
+        } else {
+            PerfProfileReport& total = m_latestFleetReport.perfReport;
+            weightedTimeSum += perf.avgTimeMs * perf.completedSteps;
+            total.totalSteps += perf.totalSteps;
+            total.completedSteps += perf.completedSteps;
+            total.minTimeMs = (std::min)(total.minTimeMs, perf.minTimeMs);
+            total.maxTimeMs = (std::max)(total.maxTimeMs, perf.maxTimeMs);
+            total.jitterMs = (std::max)(total.jitterMs, perf.jitterMs);
+            total.memoryDeltaMB += perf.memoryDeltaMB;
+            total.memoryLeakRateMBPer10k =
+                (std::max)(total.memoryLeakRateMBPer10k, perf.memoryLeakRateMBPer10k);
+            total.encounteredException = total.encounteredException || perf.encounteredException;
+            if (perf.realtimeVerdict == "FAIL"
+                || (perf.realtimeVerdict == "WARNING" && total.realtimeVerdict == "PASS")) {
+                total.realtimeVerdict = perf.realtimeVerdict;
+            }
+            if (total.completedSteps > 0) {
+                total.avgTimeMs = weightedTimeSum / total.completedSteps;
+            }
+        }
+        for (auto& dllReport :
+             m_latestFleetReport.modelReports[static_cast<size_t>(modelIndex)].dllReports) {
+            dllReport.perfReport = perf;
+        }
+
+        model.harness->SetTrajectoryCapture(true);
+        RandomValueBlob sample = model.harness->Sample(static_cast<uint32_t>(1000 + modelIndex));
+        int returnCode = 0;
+        bool seh = false;
+        std::string trajectoryError;
+        model.harness->RunOnce(sample, &returnCode, &seh, trajectoryError);
+        model.harness->SetTrajectoryCapture(false);
+        std::vector<TrajectorySample> trajectory;
+        model.harness->FetchTrajectory(trajectory);
+        ++m_latestFleetReport.trajectoryModelsTested;
+        if (!seh && returnCode == 0 && !trajectory.empty()) {
+            ++m_latestFleetReport.trajectoryModelsPassed;
+        }
+        for (auto& dllReport :
+             m_latestFleetReport.modelReports[static_cast<size_t>(modelIndex)].dllReports) {
+            dllReport.trajReport.totalDataPoints = static_cast<int>(trajectory.size());
+            dllReport.trajReport.overallPass =
+                !seh && returnCode == 0 && !trajectory.empty();
+        }
+        logMessage(QString("INFO: 型号「%1」轨迹检查完成，采集 %2 个点")
+            .arg(model.name).arg(trajectory.size()));
+    }
+
+    if (!compiledIndexes.empty()) {
+        ConcurrencyTestConfig multiConfig;
+        multiConfig.mode = ConcurrencyTestMode::MultiModel;
+        for (int modelIndex : compiledIndexes) {
+            FleetModelEntry& model = m_models[static_cast<size_t>(modelIndex)];
+            MultiModelSpec spec;
+            spec.harness = model.harness.get();
+            spec.count = model.instanceCount;
+            spec.modelName = qToUtf8(model.name);
+            multiConfig.models.push_back(spec);
+        }
+        m_latestFleetReport.multiModelReport = ConcurrencyTester::RunMultiModel(multiConfig);
+
+        ConcurrencyTestReport threadTotal;
+        threadTotal.mode = ConcurrencyTestMode::MultiThread;
+        threadTotal.modelTypeCount = static_cast<int>(compiledIndexes.size());
+        threadTotal.multiThreadSafe = true;
+        threadTotal.verdict = "PASS";
+        for (int modelIndex : compiledIndexes) {
+            ConcurrencyTestConfig threadConfig;
+            threadConfig.mode = ConcurrencyTestMode::MultiThread;
+            threadConfig.count = m_spnThreadCount->value();
+            ConcurrencyTestReport current =
+                ConcurrencyTester::Run(*m_models[static_cast<size_t>(modelIndex)].harness, threadConfig);
+            threadTotal.workerCount += current.workerCount;
+            threadTotal.successCount += current.successCount;
+            threadTotal.userFailCount += current.userFailCount;
+            threadTotal.exceptionCount += current.exceptionCount;
+            threadTotal.crashed = threadTotal.crashed || current.crashed;
+            threadTotal.multiThreadSafe = threadTotal.multiThreadSafe && current.multiThreadSafe;
+            for (auto& result : current.threadResults) {
+                result.modelName = qToUtf8(m_models[static_cast<size_t>(modelIndex)].name);
+                threadTotal.threadResults.push_back(result);
+            }
+            if (current.verdict == "FAIL"
+                || (current.verdict == "WARNING" && threadTotal.verdict == "PASS")) {
+                threadTotal.verdict = current.verdict;
+            }
+        }
+        threadTotal.summary = "已完成全部已编译型号的多线程 UserMain 测试";
+        m_latestFleetReport.multiThreadReport = threadTotal;
+    }
+
     m_latestFleetReport.overallPass = (passedModels == static_cast<int>(m_models.size()));
+    if (m_latestFleetReport.perfReport.realtimeVerdict == "FAIL"
+        || m_latestFleetReport.multiModelReport.verdict == "FAIL"
+        || m_latestFleetReport.multiThreadReport.verdict == "FAIL"
+        || (m_latestFleetReport.trajectoryModelsTested > 0
+            && m_latestFleetReport.trajectoryModelsPassed
+                != m_latestFleetReport.trajectoryModelsTested)) {
+        m_latestFleetReport.overallPass = false;
+    }
 
     // Aggregate badges across all models into m_latestDualReport counts/sizes
     m_latestDualReport = DualBuildPrecheckReport();
@@ -1408,6 +2165,7 @@ void MainWindow::runFullPrecheck() {
         m_latestReport.dllPath = first.dllPath;
         m_latestReport.peReport = first.peReport;
         m_latestReport.loadReport = first.loadReport;
+        m_latestReport.trajReport = first.trajReport;
         m_latestReport.buildConfig = first.buildConfig;
         m_latestReport.timestamp = m_latestFleetReport.timestamp;
         m_latestReport.multiModelReport = m_latestFleetReport.multiModelReport;
@@ -1415,10 +2173,65 @@ void MainWindow::runFullPrecheck() {
         m_latestReport.perfReport = m_latestFleetReport.perfReport;
     }
 
+    if (!m_latestFleetReport.perfReport.realtimeVerdict.empty()) {
+        const auto& perf = m_latestFleetReport.perfReport;
+        m_pChartViewer->UpdatePerfCharts(perf);
+        m_lblPerfSummary->setText(
+            QString("压测汇总: Avg %1 ms | Max %2 ms | 内存增长 %3 MB/10k | %4")
+                .arg(perf.avgTimeMs, 0, 'f', 4)
+                .arg(perf.maxTimeMs, 0, 'f', 4)
+                .arg(perf.memoryLeakRateMBPer10k, 0, 'f', 2)
+                .arg(qUtf8(perf.realtimeVerdict)));
+    }
+    if (!m_latestFleetReport.multiModelReport.verdict.empty()) {
+        updateResultTable(m_tblMultiModelResults, m_latestFleetReport.multiModelReport);
+        m_lblMultiModelSummary->setText(QString("多型号并行汇总: %1 — %2")
+            .arg(qUtf8(m_latestFleetReport.multiModelReport.verdict))
+            .arg(qUtf8(m_latestFleetReport.multiModelReport.summary)));
+    }
+    if (!m_latestFleetReport.multiThreadReport.verdict.empty()) {
+        updateResultTable(m_tblMultiThreadResults, m_latestFleetReport.multiThreadReport);
+        m_lblMultiThreadSummary->setText(QString("多线程测试汇总: %1 — %2")
+            .arg(qUtf8(m_latestFleetReport.multiThreadReport.verdict))
+            .arg(qUtf8(m_latestFleetReport.multiThreadReport.summary)));
+    }
+    if (!m_latestDualReport.headerReports.empty()) {
+        const auto& header = m_latestDualReport.headerReports.front();
+        m_lblHeaderResult->setText(
+            QString("检查结果: %1 | 编码: %2 | extern \"C\": %3 | 导出声明: %4")
+                .arg(header.overallPass ? QStringLiteral("PASS") : QStringLiteral("FAIL"))
+                .arg(qUtf8(header.encoding))
+                .arg(header.hasExternC ? QStringLiteral("有") : QStringLiteral("无"))
+                .arg(header.hasDeclspec ? QStringLiteral("有") : QStringLiteral("无")));
+        m_tblHeaderFunctions->setRowCount(0);
+        for (const auto& function : header.functionDecls) {
+            const int row = m_tblHeaderFunctions->rowCount();
+            m_tblHeaderFunctions->insertRow(row);
+            m_tblHeaderFunctions->setItem(row, 0, new QTableWidgetItem(qUtf8(function.name)));
+            m_tblHeaderFunctions->setItem(row, 1,
+                new QTableWidgetItem(qUtf8(function.fullDeclaration)));
+        }
+    }
+    if (!m_latestDualReport.libReports.empty()) {
+        const auto& lib = m_latestDualReport.libReports.front();
+        m_lblLibResult->setText(
+            QString("检查结果: %1 | 架构: %2 | 类型: %3 | 缺少符号: %4")
+                .arg(lib.overallPass ? QStringLiteral("PASS") : QStringLiteral("FAIL"))
+                .arg(qUtf8(lib.architecture))
+                .arg(qUtf8(lib.libType))
+                .arg(lib.missingSymbols.size()));
+        m_tblLibSymbols->setRowCount(0);
+        for (const auto& symbol : lib.foundSymbols) {
+            const int row = m_tblLibSymbols->rowCount();
+            m_tblLibSymbols->insertRow(row);
+            m_tblLibSymbols->setItem(row, 0, new QTableWidgetItem(qUtf8(symbol)));
+        }
+    }
+
     updateStatusBadges();
     refreshPeSelectors();
     refreshReportBrowser();
-    m_pCentralTabs->setCurrentIndex(4); // 预检报告
+    updateWorkflowUi();
 
     logMessage(QString("SUCCESS: 全部型号预检完毕！通过 %1/%2")
         .arg(passedModels).arg(m_models.size()));
@@ -1431,7 +2244,6 @@ void MainWindow::runStressTestOnly() {
     FleetModelEntry* entry = selectedTestModel(m_comboStressModel);
     if (!entry || !entry->harness) return;
 
-    m_pCentralTabs->setCurrentIndex(1); // 性能压测
     int runs = m_spnSteps->value();
     double targetHz = m_comboHz->currentData().toDouble();
     double frameBudgetMs = 1000.0 / (targetHz > 0 ? targetHz : 50.0);
@@ -1470,7 +2282,6 @@ void MainWindow::runTrajectoryPreview() {
     FleetModelEntry* entry = selectedTestModel(m_comboStressModel);
     if (!entry || !entry->harness) return;
 
-    m_pCentralTabs->setCurrentIndex(1);
     logMessage(QString("INFO: 试跑型号「%1」并采集 out_lat/out_lon 二维轨迹...")
         .arg(entry->name));
 
@@ -1515,6 +2326,7 @@ void MainWindow::runTrajectoryPreview() {
 
     if (!ok || seh) {
         fillTrajTable({});
+        updateWorkflowUi();
         m_lblTrajOut->setText(QStringLiteral("轨迹输出: 试跑失败 — %1")
             .arg(qUtf8(err.empty() ? "SEH/加载错误" : err)));
         logMessage(QString("ERROR: 轨迹试跑失败: %1").arg(qUtf8(err)));
@@ -1525,6 +2337,7 @@ void MainWindow::runTrajectoryPreview() {
     }
     if (pts.isEmpty()) {
         fillTrajTable({});
+        updateWorkflowUi();
         m_lblTrajOut->setText(
             QStringLiteral("轨迹输出: 未采集到点。请在 UserMain 循环中写入 "
                            "out_lat/out_lon 并调用 RecordTrajectoryPoint(out_lat, out_lon) 后重新编译。"));
@@ -1533,6 +2346,7 @@ void MainWindow::runTrajectoryPreview() {
     }
 
     fillTrajTable(pts);
+    updateWorkflowUi();
     const auto& last = pts.last();
     m_lblTrajOut->setText(
         QStringLiteral("轨迹输出: 点数=%1 | 末点 out_lat=%2, out_lon=%3 | 随机参数: %4")
@@ -1543,15 +2357,13 @@ void MainWindow::runTrajectoryPreview() {
     logMessage(QString("SUCCESS: 轨迹试跑完成，记录 %1 个经纬度点").arg(pts.size()));
 }
 
-void MainWindow::startConcurrencyWorker(UserCodeHarness* harness, const ConcurrencyTestConfig& cfg, int resultTabIndex) {
+void MainWindow::startConcurrencyWorker(UserCodeHarness* harness, const ConcurrencyTestConfig& cfg) {
     if (m_pWorkerThread) {
         m_pWorkerThread->quit();
         m_pWorkerThread->wait();
         delete m_pWorkerThread;
         m_pWorkerThread = nullptr;
     }
-
-    m_pCentralTabs->setCurrentIndex(resultTabIndex);
 
     m_pWorkerThread = new QThread();
     ConcurrencyTestWorker* worker = new ConcurrencyTestWorker(harness, cfg);
@@ -1598,7 +2410,7 @@ void MainWindow::runMultiModelTest() {
     for (const auto& s : cfg.models) total += s.count;
     logMessage(QString("INFO: 启动多型号并行 (型号 %1 种, 总实例 %2)...")
         .arg(cfg.models.size()).arg(total));
-    startConcurrencyWorker(nullptr, cfg, 2); // 多型号并行
+    startConcurrencyWorker(nullptr, cfg);
 }
 
 void MainWindow::runMultiThreadTest() {
@@ -1614,7 +2426,7 @@ void MainWindow::runMultiThreadTest() {
 
     logMessage(QString("INFO: 启动型号「%1」多线程测试 (线程数=%2)...")
         .arg(entry->name).arg(cfg.count));
-    startConcurrencyWorker(entry->harness.get(), cfg, 3); // 多线程
+    startConcurrencyWorker(entry->harness.get(), cfg);
 }
 
 void MainWindow::onPerfProfileProgress(int step, int total, double timeMs, double memMB) {
@@ -1628,7 +2440,6 @@ void MainWindow::onPerfProfileFinished(const PerfProfileReport& report) {
     m_latestReport.perfReport = report;
     m_latestFleetReport.perfReport = report;
     m_pChartViewer->UpdatePerfCharts(report);
-    m_pCentralTabs->setCurrentIndex(1); // 性能压测
 
     QString summary = QString(
         "压测结果: 平均耗时: %1 ms | 最大耗时: %2 ms | 抖动 StdDev: %3 ms | "
@@ -1647,6 +2458,7 @@ void MainWindow::onPerfProfileFinished(const PerfProfileReport& report) {
 
     updateStatusBadges();
     refreshReportBrowser();
+    updateWorkflowUi();
 
     logMessage("SUCCESS: UserMain 性能压测执行完毕！");
 }
@@ -1661,7 +2473,6 @@ void MainWindow::onConcurrencyFinished(const ConcurrencyTestReport& report) {
         m_lblMultiModelSummary->setText(QString("多型号并行汇总: <b>%1</b> — %2")
             .arg(qUtf8(report.verdict))
             .arg(qUtf8(report.summary)));
-        m_pCentralTabs->setCurrentIndex(2); // 多型号并行
     } else {
         m_latestReport.multiThreadReport = report;
         m_latestFleetReport.multiThreadReport = report;
@@ -1669,7 +2480,6 @@ void MainWindow::onConcurrencyFinished(const ConcurrencyTestReport& report) {
         m_lblMultiThreadSummary->setText(QString("多线程测试汇总: <b>%1</b> — %2")
             .arg(qUtf8(report.verdict))
             .arg(qUtf8(report.summary)));
-        m_pCentralTabs->setCurrentIndex(3); // 多线程
     }
 
     if (report.verdict == "FAIL") {
@@ -1681,6 +2491,7 @@ void MainWindow::onConcurrencyFinished(const ConcurrencyTestReport& report) {
 
     updateStatusBadges();
     refreshReportBrowser();
+    updateWorkflowUi();
 
     logMessage(QString("SUCCESS: %1 完成，判定=%2")
         .arg(isMultiModel ? "多型号并行" : "多线程测试")
@@ -1691,7 +2502,7 @@ void MainWindow::updatePeView(const PeAnalysisReport& pe) {
     m_lblPeArch->setText(QString("CPU 架构: %1%2")
         .arg(qUtf8(pe.architecture))
         .arg(pe.isArchMatch ? " (与宿主匹配)" : " (与宿主不匹配)"));
-    m_lblPeCrt->setText(QString("CRT 链接方式: %1").arg(qUtf8(pe.crtLinkage)));
+    m_lblPeCrt->setText(QString("运行库类型: %1").arg(qUtf8(pe.crtLinkage)));
     if (!pe.filePath.empty()) {
         m_lblPeArch->setToolTip(qUtf8(pe.filePath));
         m_lblPeCrt->setToolTip(qUtf8(pe.filePath));
@@ -1703,24 +2514,11 @@ void MainWindow::updatePeView(const PeAnalysisReport& pe) {
         m_tblImports->insertRow(row);
         m_tblImports->setItem(row, 0, new QTableWidgetItem(qUtf8(dep.name)));
         QTableWidgetItem* st = new QTableWidgetItem(dep.found ? "找到" : "缺失");
-        if (!dep.found) {
-            st->setForeground(QBrush(QColor("#dc2626")));
-        }
         m_tblImports->setItem(row, 1, st);
         m_tblImports->setItem(row, 2, new QTableWidgetItem(qUtf8(dep.resolvedPath)));
     }
 
-    m_tblExports->setRowCount(0);
-    for (const auto& exp : pe.exportedSymbols) {
-        int row = m_tblExports->rowCount();
-        m_tblExports->insertRow(row);
-        m_tblExports->setItem(row, 0, new QTableWidgetItem(qUtf8(exp.name)));
-        m_tblExports->setItem(row, 1, new QTableWidgetItem(QString::number(exp.ordinal)));
-        QString match = exp.isRequiredInterface ? "必需接口" : "普通导出";
-        m_tblExports->setItem(row, 2, new QTableWidgetItem(match));
-    }
-
-    logMessage(QString("INFO: PE 视图已更新 — 依赖 %1 项, 导出 %2 个符号 [%3]")
+    logMessage(QString("INFO: DLL 文件与依赖视图已更新 — 依赖 %1 项, 导出 %2 个符号 [%3]")
         .arg(pe.importedDlls.size())
         .arg(pe.exportedSymbols.size())
         .arg(qUtf8(pe.filePath)));
@@ -1814,8 +2612,11 @@ void MainWindow::updateStatusBadges() {
 }
 
 void MainWindow::exportReport() {
-    const bool hasFleet = !m_latestFleetReport.modelReports.empty();
-    if (!hasFleet && m_latestDualReport.packageDir.empty() && m_latestReport.dllPath.empty()) {
+    const bool hasFleet = !m_latestFleetReport.modelReports.empty() && !m_showSingleItemReport;
+    const bool hasSingle = !m_latestReport.headerPath.empty()
+        || !m_latestReport.libPath.empty()
+        || !m_latestReport.dllPath.empty();
+    if (!hasFleet && m_latestDualReport.packageDir.empty() && !hasSingle) {
         QMessageBox::warning(this, "警告", "请先运行预检流程后再导出报告！");
         return;
     }
@@ -1827,7 +2628,7 @@ void MainWindow::exportReport() {
     bool success = false;
     if (hasFleet) {
         success = ReportGenerator::SaveFleetReportToFile(m_latestFleetReport, qToUtf8(savePath));
-    } else if (!m_latestDualReport.packageDir.empty()) {
+    } else if (!m_showSingleItemReport && !m_latestDualReport.packageDir.empty()) {
         success = ReportGenerator::SaveDualReportToFile(m_latestDualReport, qToUtf8(savePath));
     } else {
         success = ReportGenerator::SaveReportToFile(m_latestReport, qToUtf8(savePath));

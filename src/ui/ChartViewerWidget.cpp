@@ -1,5 +1,6 @@
 #include "ChartViewerWidget.h"
 #include <QVBoxLayout>
+#include <QTabBar>
 #include <QPen>
 #include <QColor>
 #include <algorithm>
@@ -20,7 +21,7 @@ ChartViewerWidget::ChartViewerWidget(QWidget* parent)
 
     m_pTimeChart = new QChart();
     m_pTimeChart->setTitle("单步计算耗时抖动曲线 (CPU Step Execution Time)");
-    m_pTimeChart->setTheme(QChart::ChartThemeLight);
+    m_pTimeChart->setTheme(QChart::ChartThemeDark);
 
     m_pTimeSeries = new QLineSeries();
     m_pTimeSeries->setName("单步耗时 (ms)");
@@ -59,7 +60,7 @@ ChartViewerWidget::ChartViewerWidget(QWidget* parent)
 
     m_pMemChart = new QChart();
     m_pMemChart->setTitle("物理内存占用曲线 (Working Set Memory Footprint)");
-    m_pMemChart->setTheme(QChart::ChartThemeLight);
+    m_pMemChart->setTheme(QChart::ChartThemeDark);
 
     m_pMemSeries = new QLineSeries();
     m_pMemSeries->setName("Working Set 物理内存 (MB)");
@@ -93,6 +94,13 @@ ChartViewerWidget::ChartViewerWidget(QWidget* parent)
 }
 
 ChartViewerWidget::~ChartViewerWidget() {
+}
+
+void ChartViewerWidget::SetCurrentChart(int index) {
+    if (m_pTabWidget && index >= 0 && index < m_pTabWidget->count()) {
+        m_pTabWidget->setCurrentIndex(index);
+        m_pTabWidget->tabBar()->hide();
+    }
 }
 
 void ChartViewerWidget::PrepareLiveProfiling(int totalSteps, double frameBudgetMs) {

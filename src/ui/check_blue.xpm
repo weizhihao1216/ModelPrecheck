@@ -1,0 +1,20 @@
+/* XPM */
+static const char *check_blue_xpm[] = {
+"14 14 2 1",
+"  c None",
+"B c #0066CC",
+"              ",
+"           BB ",
+"          BB  ",
+"         BB   ",
+"        BB    ",
+" BB    BB     ",
+"  BB  BB      ",
+"   BBBB       ",
+"    BB        ",
+"              ",
+"              ",
+"              ",
+"              ",
+"              "
+};

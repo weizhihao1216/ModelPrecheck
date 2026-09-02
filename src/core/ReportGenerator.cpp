@@ -10,20 +10,29 @@ std::string ReportGenerator::GenerateHtml(const CombinedPrecheckReport& report) 
 
     std::string badgeColor = "#a6adc8"; // gray = partial / not fully run
     std::string verdictText = "PARTIAL";
+    const bool headerRanTop = !report.headerPath.empty();
+    const bool libRanTop = !report.libPath.empty();
     const bool peRanTop = !report.peReport.filePath.empty() || !report.dllPath.empty();
+    const bool loadRanTop = report.loadReport.isLoaded
+        || !report.loadReport.errorLog.empty()
+        || report.loadReport.exceptionCode != 0
+        || report.loadReport.boundSymbolCount > 0
+        || report.loadReport.missingSymbolCount > 0;
     const bool perfRanTop = !report.perfReport.realtimeVerdict.empty();
-    if (peRanTop || perfRanTop || !report.multiThreadReport.verdict.empty() || !report.multiModelReport.verdict.empty()) {
+    if (headerRanTop || libRanTop || peRanTop || loadRanTop || perfRanTop
+        || !report.multiThreadReport.verdict.empty() || !report.multiModelReport.verdict.empty()) {
         bool anyFail = false;
-        if (peRanTop && (!report.peReport.overallPass || !report.loadReport.isLoaded)) anyFail = true;
+        if (headerRanTop && !report.headerReport.overallPass) anyFail = true;
+        if (libRanTop && !report.libReport.overallPass) anyFail = true;
+        if (peRanTop && !report.peReport.overallPass) anyFail = true;
+        if (loadRanTop && !report.loadReport.isLoaded) anyFail = true;
         if (perfRanTop && report.perfReport.realtimeVerdict == "FAIL") anyFail = true;
         if (report.multiThreadReport.verdict == "FAIL") anyFail = true;
         if (report.multiModelReport.verdict == "FAIL") anyFail = true;
         if (anyFail) {
             badgeColor = "#f38ba8";
             verdictText = "FAIL";
-        } else if (report.overallPass || report.multiThreadReport.verdict == "PASS"
-                   || report.multiModelReport.verdict == "PASS"
-                   || (perfRanTop && report.perfReport.realtimeVerdict == "PASS")) {
+        } else {
             badgeColor = "#a6e3a1";
             verdictText = "PASS";
         }
@@ -75,20 +84,30 @@ std::string ReportGenerator::GenerateHtml(const CombinedPrecheckReport& report) 
         html << "    <tr><td>1. 头文件(.h)规范预检</td><td>编码校验/extern \"C\"/接口原型</td><td>编码: "
              << report.headerReport.encoding << " | extern \"C\": " << (report.headerReport.hasExternC ? "有" : "无")
              << "</td><td class=\"" << (report.headerReport.overallPass ? "pass\">PASS" : "fail\">FAIL") << "</td></tr>\n";
+    } else {
+        html << "    <tr><td>1. 头文件(.h)规范预检</td><td>编码校验/extern \"C\"/接口原型</td>"
+             << "<td>未执行预检</td><td class=\"warn\">N/A</td></tr>\n";
     }
 
     if (!report.libPath.empty()) {
         html << "    <tr><td>2. LIB 库(.lib)规范预检</td><td>COFF架构/导入库类型/符号匹配</td><td>"
              << report.libReport.architecture << " / " << report.libReport.libType
              << "</td><td class=\"" << (report.libReport.overallPass ? "pass\">PASS" : "fail\">FAIL") << "</td></tr>\n";
+    } else {
+        html << "    <tr><td>2. LIB 库(.lib)规范预检</td><td>COFF架构/导入库类型/符号匹配</td>"
+             << "<td>未执行预检</td><td class=\"warn\">N/A</td></tr>\n";
     }
 
     // PE / Load / Perf: distinguish "not run" from real FAIL
     const bool peRan = !report.peReport.filePath.empty() || !report.dllPath.empty();
     const bool pePass = peRan && report.peReport.overallPass;
-    const bool loadRan = peRan; // load attempted together with PE in one-click / build precheck
-    const bool loadPass = report.loadReport.isLoaded;
+    const bool loadRan = report.loadReport.isLoaded
+        || !report.loadReport.errorLog.empty()
+        || report.loadReport.exceptionCode != 0
+        || report.loadReport.boundSymbolCount > 0
+        || report.loadReport.missingSymbolCount > 0;
     const bool perfRan = !report.perfReport.realtimeVerdict.empty();
+    const bool trajectoryRan = report.trajReport.totalDataPoints > 0;
     const bool multiModelRan = !report.multiModelReport.verdict.empty();
     const bool multiThreadRan = !report.multiThreadReport.verdict.empty();
 
@@ -97,20 +116,20 @@ std::string ReportGenerator::GenerateHtml(const CombinedPrecheckReport& report) 
         return pass ? "pass\">PASS" : "fail\">FAIL";
     };
 
-    html << "    <tr><td>3. DLL 静态 PE 检查</td><td>架构匹配/CRT类型/依赖库完整性</td><td>"
+    html << "    <tr><td>3. DLL 文件与依赖检查</td><td>架构匹配/运行库类型/依赖文件完整性</td><td>"
          << (peRan ? (report.peReport.architecture + " / " + report.peReport.crtLinkage) : std::string("未执行一键预检"))
          << "</td><td class=\"" << statusCell(peRan, pePass) << "</td></tr>\n"
-         << "    <tr><td>4. 导出接口校验</td><td>Init / Step / Destroy / Info</td><td>";
-    if (!peRan) {
+         << "    <tr><td>4. DLL 接口与加载检查</td><td>导出接口/安全加载/异常保护</td><td>";
+    if (!loadRan) {
         html << "未执行一键预检</td><td class=\"warn\">N/A</td></tr>\n";
     } else {
-        html << "缺少导出: " << report.peReport.missingExportCount << " 个</td><td class=\""
-             << (report.peReport.missingExportCount == 0 ? "pass\">PASS" : "fail\">FAIL") << "</td></tr>\n";
+        const bool interfaceLoadPass = report.loadReport.isLoaded
+            && report.loadReport.missingSymbolCount == 0;
+        html << (report.loadReport.isLoaded ? "加载成功" : "加载失败")
+             << "，缺少接口: " << report.loadReport.missingSymbolCount << " 个</td><td class=\""
+             << statusCell(true, interfaceLoadPass) << "</td></tr>\n";
     }
-    html << "    <tr><td>5. 动态加载与SEH</td><td>LoadLibrary & Exception Protection</td><td>"
-         << (!loadRan ? "未执行一键预检" : (loadPass ? "成功加载" : "加载失败"))
-         << "</td><td class=\"" << statusCell(loadRan, loadPass) << "</td></tr>\n"
-         << "    <tr><td>6. UserMain 性能压测</td><td>平均/最大耗时 ( Budget: " << report.perfReport.frameBudgetMs << " ms)</td><td>";
+    html << "    <tr><td>5. UserMain 性能压测</td><td>平均/最大耗时 ( Budget: " << report.perfReport.frameBudgetMs << " ms)</td><td>";
     if (!perfRan) {
         html << "未执行压测</td><td class=\"warn\">N/A</td></tr>\n";
     } else {
@@ -119,13 +138,17 @@ std::string ReportGenerator::GenerateHtml(const CombinedPrecheckReport& report) 
                 : (report.perfReport.realtimeVerdict == "WARNING" ? "warn\">WARNING" : "fail\">FAIL"))
              << "</td></tr>\n";
     }
-    html << "    <tr><td>7. 内存泄露监测</td><td>每 10k 次 UserMain 内存增长</td><td>";
+    html << "    <tr><td>6. 内存泄露监测</td><td>每 10k 次 UserMain 内存增长</td><td>";
     if (!perfRan) {
         html << "未执行压测</td><td class=\"warn\">N/A</td></tr>\n";
     } else {
         html << report.perfReport.memoryLeakRateMBPer10k << " MB / 10k</td><td class=\""
              << (report.perfReport.memoryLeakRateMBPer10k < 5.0 ? "pass\">PASS" : "warn\">WARN") << "</td></tr>\n";
     }
+    html << "    <tr><td>7. 运行轨迹检查</td><td>经纬度路径点采集</td><td>"
+         << (trajectoryRan ? (std::to_string(report.trajReport.totalDataPoints) + " 个路径点") : "未执行")
+         << "</td><td class=\"" << statusCell(trajectoryRan, report.trajReport.overallPass)
+         << "</td></tr>\n";
     html << "    <tr><td>8. 多型号并行</td><td>多路径头文件/DLL 按数量并发</td><td>"
          << (multiModelRan ? report.multiModelReport.summary : "未执行")
          << "</td><td class=\""
@@ -414,28 +437,39 @@ bool ReportGenerator::SaveDualReportToFile(const DualBuildPrecheckReport& dualRe
 std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetReport) {
     std::stringstream html;
 
+    int headerTotal = 0, headerPass = 0, libTotal = 0, libPass = 0;
     int dllTotal = 0, dllPePass = 0, dllLoadPass = 0, missingExports = 0;
-    bool peRan = !fleetReport.modelReports.empty();
+    bool peRan = false;
     for (const auto& m : fleetReport.modelReports) {
+        headerTotal += static_cast<int>(m.headerReports.size());
+        headerPass += m.passedHeaderCount;
+        libTotal += static_cast<int>(m.libReports.size());
+        libPass += m.passedLibCount;
         for (const auto& d : m.dllReports) {
             ++dllTotal;
             if (d.peReport.overallPass) ++dllPePass;
             if (d.loadReport.isLoaded) ++dllLoadPass;
-            missingExports += d.peReport.missingExportCount;
+            missingExports += d.loadReport.missingSymbolCount;
         }
     }
+    peRan = dllTotal > 0;
     const bool perfRan = !fleetReport.perfReport.realtimeVerdict.empty();
     const bool multiModelRan = !fleetReport.multiModelReport.verdict.empty();
     const bool multiThreadRan = !fleetReport.multiThreadReport.verdict.empty();
+    const bool packageRan = headerTotal > 0 || libTotal > 0 || peRan;
 
     bool anyFail = peRan && (dllPePass < dllTotal || dllLoadPass < dllTotal);
+    if (headerTotal > 0 && headerPass < headerTotal) anyFail = true;
+    if (libTotal > 0 && libPass < libTotal) anyFail = true;
     if (perfRan && fleetReport.perfReport.realtimeVerdict == "FAIL") anyFail = true;
+    if (fleetReport.trajectoryModelsTested > 0
+        && fleetReport.trajectoryModelsPassed != fleetReport.trajectoryModelsTested) anyFail = true;
     if (fleetReport.multiModelReport.verdict == "FAIL") anyFail = true;
     if (fleetReport.multiThreadReport.verdict == "FAIL") anyFail = true;
     if (!fleetReport.overallPass && peRan) anyFail = true;
 
-    std::string badgeColor = anyFail ? "#f38ba8" : (peRan || perfRan || multiModelRan || multiThreadRan ? "#a6e3a1" : "#a6adc8");
-    std::string verdictText = anyFail ? "FAIL" : (peRan || perfRan || multiModelRan || multiThreadRan ? "PASS" : "N/A");
+    std::string badgeColor = anyFail ? "#f38ba8" : (packageRan || perfRan || multiModelRan || multiThreadRan ? "#a6e3a1" : "#a6adc8");
+    std::string verdictText = anyFail ? "FAIL" : (packageRan || perfRan || multiModelRan || multiThreadRan ? "PASS" : "N/A");
 
     auto statusCell = [](bool ran, bool pass) -> std::string {
         if (!ran) return "warn\">N/A";
@@ -475,7 +509,19 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
          << "  <table>\n"
          << "    <tr><th>测试维度</th><th>关键指标</th><th>测试结果</th><th>判定状态</th></tr>\n";
 
-    html << "    <tr><td>3. DLL 静态 PE 检查</td><td>架构匹配/CRT类型/依赖库完整性</td><td>";
+    html << "    <tr><td>1. 头文件(.h)规范预检</td><td>编码/extern \"C\"/接口原型</td><td>"
+         << (headerTotal > 0 ? (std::to_string(headerPass) + "/" + std::to_string(headerTotal) + " 通过")
+                             : "未发现头文件")
+         << "</td><td class=\"" << statusCell(headerTotal > 0, headerPass == headerTotal)
+         << "</td></tr>\n";
+
+    html << "    <tr><td>2. LIB 库(.lib)规范预检</td><td>COFF架构/库类型/接口符号</td><td>"
+         << (libTotal > 0 ? (std::to_string(libPass) + "/" + std::to_string(libTotal) + " 通过")
+                          : "未发现 LIB 文件")
+         << "</td><td class=\"" << statusCell(libTotal > 0, libPass == libTotal)
+         << "</td></tr>\n";
+
+    html << "    <tr><td>3. DLL 文件与依赖检查</td><td>架构匹配/运行库类型/依赖文件完整性</td><td>";
     if (!peRan) {
         html << "未执行一键预检</td><td class=\"warn\">N/A</td></tr>\n";
     } else {
@@ -483,23 +529,17 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
              << statusCell(true, dllPePass == dllTotal && dllTotal > 0) << "</td></tr>\n";
     }
 
-    html << "    <tr><td>4. 导出接口校验</td><td>Init / Step / Destroy / Info</td><td>";
+    html << "    <tr><td>4. DLL 接口与加载检查</td><td>导出接口/安全加载/异常保护</td><td>";
     if (!peRan) {
         html << "未执行一键预检</td><td class=\"warn\">N/A</td></tr>\n";
     } else {
-        html << "缺少导出合计: " << missingExports << " 个</td><td class=\""
-             << (missingExports == 0 ? "pass\">PASS" : "fail\">FAIL") << "</td></tr>\n";
+        const bool pass = missingExports == 0 && dllLoadPass == dllTotal;
+        html << "加载成功 " << dllLoadPass << "/" << dllTotal
+             << "，缺少接口 " << missingExports << " 个</td><td class=\""
+             << statusCell(true, pass) << "</td></tr>\n";
     }
 
-    html << "    <tr><td>5. 动态加载与SEH</td><td>LoadLibrary & Exception Protection</td><td>";
-    if (!peRan) {
-        html << "未执行一键预检</td><td class=\"warn\">N/A</td></tr>\n";
-    } else {
-        html << "全型号 DLL " << dllLoadPass << "/" << dllTotal << " 加载成功</td><td class=\""
-             << statusCell(true, dllLoadPass == dllTotal && dllTotal > 0) << "</td></tr>\n";
-    }
-
-    html << "    <tr><td>6. UserMain 性能压测</td><td>平均/最大耗时 ( Budget: "
+    html << "    <tr><td>5. UserMain 性能压测</td><td>平均/最大耗时 ( Budget: "
          << fleetReport.perfReport.frameBudgetMs << " ms)</td><td>";
     if (!perfRan) {
         html << "未执行压测</td><td class=\"warn\">N/A</td></tr>\n";
@@ -511,7 +551,7 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
              << "</td></tr>\n";
     }
 
-    html << "    <tr><td>7. 内存泄露监测</td><td>每 10k 次 UserMain 内存增长</td><td>";
+    html << "    <tr><td>6. 内存泄露监测</td><td>每 10k 次 UserMain 内存增长</td><td>";
     if (!perfRan) {
         html << "未执行压测</td><td class=\"warn\">N/A</td></tr>\n";
     } else {
@@ -519,6 +559,18 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
              << (fleetReport.perfReport.memoryLeakRateMBPer10k < 5.0 ? "pass\">PASS" : "warn\">WARN")
              << "</td></tr>\n";
     }
+
+    const bool trajectoryRan = fleetReport.trajectoryModelsTested > 0;
+    html << "    <tr><td>7. 运行轨迹检查</td><td>经纬度路径点采集</td><td>"
+         << (trajectoryRan
+             ? (std::to_string(fleetReport.trajectoryModelsPassed) + "/"
+                + std::to_string(fleetReport.trajectoryModelsTested) + " 个型号通过")
+             : "未执行")
+         << "</td><td class=\""
+         << statusCell(trajectoryRan,
+                       trajectoryRan
+                       && fleetReport.trajectoryModelsPassed == fleetReport.trajectoryModelsTested)
+         << "</td></tr>\n";
 
     html << "    <tr><td>8. 多型号并行</td><td>多路径头文件/DLL 按数量并发</td><td>"
          << (multiModelRan ? fleetReport.multiModelReport.summary : "未执行")
@@ -547,8 +599,34 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
     }
     html << "  </table>\n\n";
 
-    // 按型号划分：静态 PE / 加载明细（与单报告「4.」对应，始终输出）
-    html << "  <h2>4. 静态 PE 结构与依赖库分析</h2>\n";
+    html << "  <h2>3. 头文件规范检查结果</h2>\n"
+         << "  <table><tr><th>型号</th><th>头文件</th><th>编码</th><th>extern \"C\"</th><th>判定</th></tr>\n";
+    for (const auto& m : fleetReport.modelReports) {
+        for (const auto& header : m.headerReports) {
+            html << "  <tr><td>" << m.modelName << "</td><td><code>" << header.filePath
+                 << "</code></td><td>" << header.encoding << "</td><td>"
+                 << (header.hasExternC ? "有" : "无") << "</td><td class=\""
+                 << (header.overallPass ? "pass\">PASS" : "fail\">FAIL") << "</td></tr>\n";
+        }
+    }
+    if (headerTotal == 0) html << "  <tr><td colspan=\"5\">未发现头文件</td></tr>\n";
+    html << "  </table>\n\n";
+
+    html << "  <h2>4. LIB 库文件检查结果</h2>\n"
+         << "  <table><tr><th>型号</th><th>LIB 文件</th><th>架构</th><th>库类型</th><th>判定</th></tr>\n";
+    for (const auto& m : fleetReport.modelReports) {
+        for (const auto& lib : m.libReports) {
+            html << "  <tr><td>" << m.modelName << "</td><td><code>" << lib.filePath
+                 << "</code></td><td>" << lib.architecture << "</td><td>" << lib.libType
+                 << "</td><td class=\"" << (lib.overallPass ? "pass\">PASS" : "fail\">FAIL")
+                 << "</td></tr>\n";
+        }
+    }
+    if (libTotal == 0) html << "  <tr><td colspan=\"5\">未发现 LIB 文件</td></tr>\n";
+    html << "  </table>\n\n";
+
+    // 按型号划分：DLL 文件结构与依赖
+    html << "  <h2>5. DLL 文件与依赖检查</h2>\n";
     for (size_t i = 0; i < fleetReport.modelReports.size(); ++i) {
         const auto& m = fleetReport.modelReports[i];
         html << "  <div class=\"model-section\">\n"
@@ -563,9 +641,8 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
                  << "      <p><b>DLL:</b> <code>" << d.dllPath << "</code> [" << d.buildConfig << "]</p>\n"
                  << "      <p>架构: " << d.peReport.architecture
                  << " | CRT: " << d.peReport.crtLinkage
-                 << " | PE: <span class=\"" << (d.peReport.overallPass ? "pass\">PASS" : "fail\">FAIL") << "</span>"
-                 << " | 加载: <span class=\"" << (d.loadReport.isLoaded ? "pass\">PASS" : "fail\">FAIL") << "</span>"
-                 << " | 缺导出: " << d.peReport.missingExportCount << "</p>\n";
+                 << " | 文件检查: <span class=\""
+                 << (d.peReport.overallPass ? "pass\">PASS" : "fail\">FAIL") << "</span></p>\n";
 
             html << "      <p><b>导入依赖</b></p>\n<table>\n"
                  << "      <tr><th>依赖 DLL</th><th>状态</th><th>解析路径</th></tr>\n";
@@ -577,10 +654,26 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
             if (d.peReport.importedDlls.empty()) {
                 html << "      <tr><td colspan=\"3\">无</td></tr>\n";
             }
-            html << "      </table>\n";
+            html << "      </table>\n    </div>\n";
+        }
+        html << "  </div>\n";
+    }
 
-            html << "      <p><b>导出符号</b></p>\n<table>\n"
-                 << "      <tr><th>函数名</th><th>Ordinal</th></tr>\n";
+    html << "  <h2>6. DLL 接口与加载检查</h2>\n";
+    for (const auto& m : fleetReport.modelReports) {
+        html << "  <div class=\"model-section\">\n"
+             << "    <h3>型号: " << (m.modelName.empty() ? "(未命名)" : m.modelName) << "</h3>\n";
+        if (m.dllReports.empty()) {
+            html << "    <p class=\"warn\">该型号包内未发现 DLL</p>\n";
+        }
+        for (const auto& d : m.dllReports) {
+            html << "    <div class=\"card\">\n"
+                 << "      <p><b>DLL:</b> <code>" << d.dllPath << "</code></p>\n"
+                 << "      <p>加载: <span class=\""
+                 << (d.loadReport.isLoaded ? "pass\">PASS" : "fail\">FAIL")
+                 << "</span> | 已绑定接口: " << d.loadReport.boundSymbolCount
+                 << " | 缺失接口: " << d.loadReport.missingSymbolCount << "</p>\n"
+                 << "      <table><tr><th>导出函数</th><th>Ordinal</th></tr>\n";
             for (const auto& exp : d.peReport.exportedSymbols) {
                 html << "      <tr><td>" << exp.name << "</td><td>" << exp.ordinal << "</td></tr>\n";
             }
@@ -592,8 +685,8 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
         html << "  </div>\n";
     }
 
-    // 5. 性能压测明细
-    html << "  <h2>5. 性能压力（UserMain 重复执行）</h2>\n"
+    // 7. 性能压测明细
+    html << "  <h2>7. 性能与内存压力（UserMain 重复执行）</h2>\n"
          << "  <div class=\"card\">\n";
     if (!perfRan) {
         html << "    <p class=\"warn\">未执行压测</p>\n";
@@ -652,13 +745,13 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
         }
     };
 
-    emitConcSection("6. 多型号并行（多路径 DLL × 各型号数量）",
+    emitConcSection("8. 多型号并行（多路径 DLL × 各型号数量）",
                     fleetReport.multiModelReport, multiModelRan);
-    emitConcSection("7. 多线程稳定性（并行 UserMain）",
+    emitConcSection("9. 多线程稳定性（并行 UserMain）",
                     fleetReport.multiThreadReport, multiThreadRan);
 
-    // 8. 日志
-    html << "  <h2>8. 预检过程日志追踪</h2>\n"
+    // 10. 日志
+    html << "  <h2>10. 预检过程日志追踪</h2>\n"
          << "  <div class=\"log-box\">\n";
     bool anyLog = false;
     for (const auto& m : fleetReport.modelReports) {

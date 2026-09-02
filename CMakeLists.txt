@@ -74,6 +74,10 @@ set(SOURCES
     src/ui/ChartViewerWidget.cpp
     src/ui/TrajectoryViewWidget.h
     src/ui/TrajectoryViewWidget.cpp
+    src/ui/CppSyntaxHighlighter.h
+    src/ui/CppSyntaxHighlighter.cpp
+    src/ui/CppCodeEditor.h
+    src/ui/CppCodeEditor.cpp
     src/ui/MainWindow.h
     src/ui/MainWindow.cpp
     src/resources.qrc

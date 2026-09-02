@@ -1,5 +1,6 @@
 <!DOCTYPE RCC><RCC version="1.0">
 <qresource prefix="/">
     <file>ui/themestyle.qss</file>
+    <file>ui/check_blue.xpm</file>
 </qresource>
 </RCC>

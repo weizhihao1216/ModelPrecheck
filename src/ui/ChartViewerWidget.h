@@ -23,6 +23,7 @@ public slots:
     void AddLiveSample(int stepIndex, double timeMs, double memoryMB);
     void UpdatePerfCharts(const PerfProfileReport& report);
     void ClearCharts();
+    void SetCurrentChart(int index);
 
 private:
     QTabWidget* m_pTabWidget;
