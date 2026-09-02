@@ -22,6 +22,7 @@ struct CombinedPrecheckReport {
     HeaderAnalysisReport headerReport;
     LibAnalysisReport libReport;
     HeaderExportConsistency consistencyReport;
+    HeaderConflictReport headerConflictReport;
     LoadResult loadReport;
     PerfProfileReport perfReport;
     TrajectoryVerificationReport trajReport;
@@ -42,6 +43,7 @@ struct DualBuildPrecheckReport {
     std::vector<CombinedPrecheckReport> dllReports;
 
     HeaderExportConsistency consistencyReport;
+    HeaderConflictReport headerConflictReport;
 
     int passedHeaderCount = 0;
     int passedLibCount = 0;
@@ -54,6 +56,7 @@ struct DualBuildPrecheckReport {
 struct FleetSessionReport {
     std::string timestamp;
     std::vector<DualBuildPrecheckReport> modelReports;
+    HeaderConflictReport crossModelHeaderConflictReport;
     ConcurrencyTestReport multiModelReport;
     ConcurrencyTestReport multiThreadReport;
     PerfProfileReport perfReport;

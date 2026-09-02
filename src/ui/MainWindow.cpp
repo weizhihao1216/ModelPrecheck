@@ -334,6 +334,17 @@ MainWindow::MainWindow(QWidget* parent)
     m_tblHeaderFunctions->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_tblHeaderFunctions->setEditTriggers(QAbstractItemView::NoEditTriggers);
     layoutTabHeader->addWidget(m_tblHeaderFunctions, 1);
+    m_lblHeaderConflictSummary = new QLabel(
+        QStringLiteral("包级冲突检查: 尚未执行"), tabHeader);
+    layoutTabHeader->addWidget(m_lblHeaderConflictSummary);
+    m_tblHeaderConflicts = new QTableWidget(0, 5, tabHeader);
+    m_tblHeaderConflicts->setHorizontalHeaderLabels({
+        QStringLiteral("问题类型"), QStringLiteral("级别"), QStringLiteral("符号/类型"),
+        QStringLiteral("涉及文件"), QStringLiteral("说明")
+    });
+    m_tblHeaderConflicts->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_tblHeaderConflicts->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    layoutTabHeader->addWidget(m_tblHeaderConflicts, 1);
 
     // Tab 1: LIB file check
     QWidget* tabLib = new QWidget(this);
@@ -1818,6 +1829,10 @@ DualBuildPrecheckReport MainWindow::precheckOneModel(const FleetModelEntry& entr
         dual.headerReports.push_back(hRep);
         combinedHeaderFuncs.insert(combinedHeaderFuncs.end(), hRep.declaredFunctions.begin(), hRep.declaredFunctions.end());
     }
+    dual.headerConflictReport = HeaderAnalyzer::AnalyzeHeaderSet(pkgFiles.allHeaderFiles);
+    for (const auto& msg : dual.headerConflictReport.logMessages) {
+        logMessage(qDecodeLog(msg));
+    }
 
     logMessage("--------------------------------------------------------------------------------");
     logMessage("INFO: 阶段 2/3: LIB 库预检 (" + QString::number(pkgFiles.allLibFiles.size()) + " 个)...");
@@ -1851,6 +1866,7 @@ DualBuildPrecheckReport MainWindow::precheckOneModel(const FleetModelEntry& entr
             logMessage("    关联头文件契约: " + qUtf8(matchedHeader));
         }
         CombinedPrecheckReport dRep = runBuildPrecheck(dPath, matchedHeader, "", qToUtf8(configStr), qToUtf8(pkgDir));
+        dRep.headerConflictReport = dual.headerConflictReport;
         if (dRep.overallPass) {
             dual.passedDllCount++;
         }
@@ -1875,11 +1891,13 @@ DualBuildPrecheckReport MainWindow::precheckOneModel(const FleetModelEntry& entr
     bool dllsPass = pkgFiles.allDllFiles.empty()
         || (dual.passedDllCount == static_cast<int>(pkgFiles.allDllFiles.size()));
 
-    dual.overallPass = headersPass && libsPass && dllsPass;
+    dual.overallPass = headersPass && libsPass && dllsPass
+        && dual.headerConflictReport.overallPass;
     return dual;
 }
 
 void MainWindow::runHeaderCheckOnly() {
+    const int modelIndex = m_comboHeaderModel->currentData().toInt();
     const QString path = m_comboHeaderFile->currentData().toString();
     if (path.isEmpty()) {
         m_lblHeaderResult->setText(QStringLiteral("检查结果: 当前型号包中未找到头文件"));
@@ -1890,6 +1908,14 @@ void MainWindow::runHeaderCheckOnly() {
     m_latestReport.headerPath = qToUtf8(path);
     m_latestReport.timestamp = qToUtf8(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
     m_latestReport.headerReport = HeaderAnalyzer::AnalyzeHeader(qToUtf8(path));
+    if (modelIndex >= 0 && modelIndex < static_cast<int>(m_models.size())) {
+        const ModelPackageFiles package = PackageScanner::ScanPackageDirectory(
+            qToUtf8(m_models[static_cast<size_t>(modelIndex)].packageDir));
+        m_latestReport.headerConflictReport =
+            HeaderAnalyzer::AnalyzeHeaderSet(package.allHeaderFiles);
+    }
+    m_latestReport.overallPass = m_latestReport.headerReport.overallPass
+        && m_latestReport.headerConflictReport.overallPass;
     const auto& report = m_latestReport.headerReport;
     m_lblHeaderResult->setText(
         QString("检查结果: %1 | 编码: %2 | extern \"C\": %3 | 导出声明: %4")
@@ -1904,6 +1930,7 @@ void MainWindow::runHeaderCheckOnly() {
         m_tblHeaderFunctions->setItem(row, 0, new QTableWidgetItem(qUtf8(function.name)));
         m_tblHeaderFunctions->setItem(row, 1, new QTableWidgetItem(qUtf8(function.fullDeclaration)));
     }
+    updateHeaderConflictView(m_latestReport.headerConflictReport);
     refreshReportBrowser();
     logMessage(QStringLiteral("SUCCESS: 头文件规范检查完成：%1").arg(path));
 }
@@ -2010,6 +2037,17 @@ void MainWindow::runFullPrecheck() {
         if (one.overallPass) ++passedModels;
         m_latestFleetReport.modelReports.push_back(one);
         m_latestDualReport = one;
+    }
+    std::vector<std::string> allModelHeaders;
+    for (const auto& modelReport : m_latestFleetReport.modelReports) {
+        allModelHeaders.insert(allModelHeaders.end(),
+                               modelReport.packageFiles.allHeaderFiles.begin(),
+                               modelReport.packageFiles.allHeaderFiles.end());
+    }
+    m_latestFleetReport.crossModelHeaderConflictReport =
+        HeaderAnalyzer::AnalyzeHeaderSet(allModelHeaders);
+    for (const auto& msg : m_latestFleetReport.crossModelHeaderConflictReport.logMessages) {
+        logMessage("跨型号 " + qDecodeLog(msg));
     }
 
     std::vector<int> compiledIndexes;
@@ -2136,7 +2174,8 @@ void MainWindow::runFullPrecheck() {
         || m_latestFleetReport.multiThreadReport.verdict == "FAIL"
         || (m_latestFleetReport.trajectoryModelsTested > 0
             && m_latestFleetReport.trajectoryModelsPassed
-                != m_latestFleetReport.trajectoryModelsTested)) {
+                != m_latestFleetReport.trajectoryModelsTested)
+        || !m_latestFleetReport.crossModelHeaderConflictReport.overallPass) {
         m_latestFleetReport.overallPass = false;
     }
 
@@ -2211,6 +2250,7 @@ void MainWindow::runFullPrecheck() {
             m_tblHeaderFunctions->setItem(row, 1,
                 new QTableWidgetItem(qUtf8(function.fullDeclaration)));
         }
+        updateHeaderConflictView(m_latestFleetReport.crossModelHeaderConflictReport);
     }
     if (!m_latestDualReport.libReports.empty()) {
         const auto& lib = m_latestDualReport.libReports.front();
@@ -2524,6 +2564,31 @@ void MainWindow::updatePeView(const PeAnalysisReport& pe) {
         .arg(qUtf8(pe.filePath)));
 }
 
+void MainWindow::updateHeaderConflictView(const HeaderConflictReport& report) {
+    m_lblHeaderConflictSummary->setText(
+        QString("包级冲突检查: %1 | 结构体/类型重名 %2 | ODR 冲突 %3 | 命名空间污染风险 %4")
+            .arg(report.overallPass ? QStringLiteral("PASS") : QStringLiteral("FAIL"))
+            .arg(report.duplicateTypeCount)
+            .arg(report.odrConflictCount)
+            .arg(report.namespacePollutionCount));
+    m_tblHeaderConflicts->setRowCount(0);
+    for (const auto& issue : report.issues) {
+        const int row = m_tblHeaderConflicts->rowCount();
+        m_tblHeaderConflicts->insertRow(row);
+        QString category;
+        if (issue.category == "DUPLICATE_TYPE") category = QStringLiteral("结构体/类型重名");
+        else if (issue.category == "ODR_CONFLICT") category = QStringLiteral("ODR 冲突");
+        else category = QStringLiteral("命名空间污染");
+        QStringList files;
+        for (const auto& file : issue.files) files.push_back(qUtf8(file));
+        m_tblHeaderConflicts->setItem(row, 0, new QTableWidgetItem(category));
+        m_tblHeaderConflicts->setItem(row, 1, new QTableWidgetItem(qUtf8(issue.severity)));
+        m_tblHeaderConflicts->setItem(row, 2, new QTableWidgetItem(qUtf8(issue.symbol)));
+        m_tblHeaderConflicts->setItem(row, 3, new QTableWidgetItem(files.join(QStringLiteral("\n"))));
+        m_tblHeaderConflicts->setItem(row, 4, new QTableWidgetItem(qUtf8(issue.detail)));
+    }
+}
+
 void MainWindow::updateResultTable(QTableWidget* table, const ConcurrencyTestReport& report) {
     if (!table) return;
     table->setRowCount(0);
@@ -2558,8 +2623,10 @@ void MainWindow::updateStatusBadges() {
     int passedH = 0, totalH = 0;
     int passedL = 0, totalL = 0;
     int passedD = 0, totalD = 0;
+    bool headerConflictsPass = true;
 
     if (!m_latestFleetReport.modelReports.empty()) {
+        headerConflictsPass = m_latestFleetReport.crossModelHeaderConflictReport.overallPass;
         for (const auto& mr : m_latestFleetReport.modelReports) {
             passedH += mr.passedHeaderCount;
             totalH += static_cast<int>(mr.headerReports.size());
@@ -2569,6 +2636,7 @@ void MainWindow::updateStatusBadges() {
             totalD += static_cast<int>(mr.dllReports.size());
         }
     } else {
+        headerConflictsPass = m_latestDualReport.headerConflictReport.overallPass;
         passedH = m_latestDualReport.passedHeaderCount;
         totalH = static_cast<int>(m_latestDualReport.headerReports.size());
         passedL = m_latestDualReport.passedLibCount;
@@ -2578,8 +2646,9 @@ void MainWindow::updateStatusBadges() {
     }
 
     if (totalH > 0) {
-        QString statusStr = QString("%1 (%2/%3)").arg(passedH == totalH ? "PASS" : "FAIL").arg(passedH).arg(totalH);
-        if (passedH == totalH) {
+        const bool headerPass = passedH == totalH && headerConflictsPass;
+        QString statusStr = QString("%1 (%2/%3)").arg(headerPass ? "PASS" : "FAIL").arg(passedH).arg(totalH);
+        if (headerPass) {
             setBadge(m_lblHeaderStatus, "头文件预检", statusStr, "#dcfce7", "#166534", "#86efac");
         } else {
             setBadge(m_lblHeaderStatus, "头文件预检", statusStr, "#fee2e2", "#991b1b", "#fca5a5");

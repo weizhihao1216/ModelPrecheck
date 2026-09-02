@@ -83,6 +83,7 @@ private:
     void applyDarkStyle();
     void updateStatusBadges();
     void updatePeView(const PeAnalysisReport& pe);
+    void updateHeaderConflictView(const HeaderConflictReport& report);
     void updateResultTable(QTableWidget* table, const ConcurrencyTestReport& report);
     void refreshModelListUi();
     void refreshModelSelectors();
@@ -137,6 +138,8 @@ private:
     QPushButton* m_btnCheckHeader;
     QLabel* m_lblHeaderResult;
     QTableWidget* m_tblHeaderFunctions;
+    QLabel* m_lblHeaderConflictSummary;
+    QTableWidget* m_tblHeaderConflicts;
     QComboBox* m_comboLibModel;
     QComboBox* m_comboLibFile;
     QPushButton* m_btnCheckLib;

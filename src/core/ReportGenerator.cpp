@@ -22,7 +22,8 @@ std::string ReportGenerator::GenerateHtml(const CombinedPrecheckReport& report) 
     if (headerRanTop || libRanTop || peRanTop || loadRanTop || perfRanTop
         || !report.multiThreadReport.verdict.empty() || !report.multiModelReport.verdict.empty()) {
         bool anyFail = false;
-        if (headerRanTop && !report.headerReport.overallPass) anyFail = true;
+        if (headerRanTop
+            && (!report.headerReport.overallPass || !report.headerConflictReport.overallPass)) anyFail = true;
         if (libRanTop && !report.libReport.overallPass) anyFail = true;
         if (peRanTop && !report.peReport.overallPass) anyFail = true;
         if (loadRanTop && !report.loadReport.isLoaded) anyFail = true;
@@ -81,9 +82,14 @@ std::string ReportGenerator::GenerateHtml(const CombinedPrecheckReport& report) 
          << "    <tr><th>测试维度</th><th>关键指标</th><th>测试结果</th><th>判定状态</th></tr>\n";
 
     if (!report.headerPath.empty()) {
+        const bool headerPass = report.headerReport.overallPass
+            && report.headerConflictReport.overallPass;
         html << "    <tr><td>1. 头文件(.h)规范预检</td><td>编码校验/extern \"C\"/接口原型</td><td>编码: "
              << report.headerReport.encoding << " | extern \"C\": " << (report.headerReport.hasExternC ? "有" : "无")
-             << "</td><td class=\"" << (report.headerReport.overallPass ? "pass\">PASS" : "fail\">FAIL") << "</td></tr>\n";
+             << " | 重名: " << report.headerConflictReport.duplicateTypeCount
+             << " | ODR: " << report.headerConflictReport.odrConflictCount
+             << " | 命名空间污染: " << report.headerConflictReport.namespacePollutionCount
+             << "</td><td class=\"" << (headerPass ? "pass\">PASS" : "fail\">FAIL") << "</td></tr>\n";
     } else {
         html << "    <tr><td>1. 头文件(.h)规范预检</td><td>编码校验/extern \"C\"/接口原型</td>"
              << "<td>未执行预检</td><td class=\"warn\">N/A</td></tr>\n";
@@ -173,7 +179,21 @@ std::string ReportGenerator::GenerateHtml(const CombinedPrecheckReport& report) 
              << "    <p><b>文本编码格式:</b> " << report.headerReport.encoding << "</p>\n"
              << "    <p><b>extern \"C\" 保护:</b> " << (report.headerReport.hasExternC ? "<span class=\"pass\">已包含</span>" : "<span class=\"fail\">未检测到</span>") << "</p>\n"
              << "    <p><b>__declspec 动态库宏:</b> " << (report.headerReport.hasDeclspec ? "<span class=\"pass\">包含</span>" : "无") << "</p>\n"
-             << "  </div>\n\n";
+             << "    <p><b>结构体/类型重名:</b> " << report.headerConflictReport.duplicateTypeCount
+             << " | <b>ODR 冲突:</b> " << report.headerConflictReport.odrConflictCount
+             << " | <b>命名空间污染风险:</b> " << report.headerConflictReport.namespacePollutionCount
+             << "</p>\n  </div>\n";
+        if (!report.headerConflictReport.issues.empty()) {
+            html << "  <table><tr><th>类型</th><th>级别</th><th>符号</th><th>说明</th></tr>\n";
+            for (const auto& issue : report.headerConflictReport.issues) {
+                html << "  <tr><td>" << issue.category << "</td><td class=\""
+                     << (issue.severity == "FAIL" ? "fail" : "warn") << "\">"
+                     << issue.severity << "</td><td>" << issue.symbol
+                     << "</td><td>" << issue.detail << "</td></tr>\n";
+            }
+            html << "  </table>\n";
+        }
+        html << "\n";
     }
 
     // LIB Library Section
@@ -438,6 +458,8 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
     std::stringstream html;
 
     int headerTotal = 0, headerPass = 0, libTotal = 0, libPass = 0;
+    int duplicateTypes = 0, odrConflicts = 0, namespaceRisks = 0;
+    bool headerConflictsPass = true;
     int dllTotal = 0, dllPePass = 0, dllLoadPass = 0, missingExports = 0;
     bool peRan = false;
     for (const auto& m : fleetReport.modelReports) {
@@ -452,6 +474,10 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
             missingExports += d.loadReport.missingSymbolCount;
         }
     }
+    duplicateTypes = fleetReport.crossModelHeaderConflictReport.duplicateTypeCount;
+    odrConflicts = fleetReport.crossModelHeaderConflictReport.odrConflictCount;
+    namespaceRisks = fleetReport.crossModelHeaderConflictReport.namespacePollutionCount;
+    headerConflictsPass = fleetReport.crossModelHeaderConflictReport.overallPass;
     peRan = dllTotal > 0;
     const bool perfRan = !fleetReport.perfReport.realtimeVerdict.empty();
     const bool multiModelRan = !fleetReport.multiModelReport.verdict.empty();
@@ -460,6 +486,7 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
 
     bool anyFail = peRan && (dllPePass < dllTotal || dllLoadPass < dllTotal);
     if (headerTotal > 0 && headerPass < headerTotal) anyFail = true;
+    if (!headerConflictsPass) anyFail = true;
     if (libTotal > 0 && libPass < libTotal) anyFail = true;
     if (perfRan && fleetReport.perfReport.realtimeVerdict == "FAIL") anyFail = true;
     if (fleetReport.trajectoryModelsTested > 0
@@ -512,7 +539,10 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
     html << "    <tr><td>1. 头文件(.h)规范预检</td><td>编码/extern \"C\"/接口原型</td><td>"
          << (headerTotal > 0 ? (std::to_string(headerPass) + "/" + std::to_string(headerTotal) + " 通过")
                              : "未发现头文件")
-         << "</td><td class=\"" << statusCell(headerTotal > 0, headerPass == headerTotal)
+         << "；重名 " << duplicateTypes << "，ODR " << odrConflicts
+         << "，命名空间污染风险 " << namespaceRisks
+         << "</td><td class=\"" << statusCell(headerTotal > 0,
+                                               headerPass == headerTotal && headerConflictsPass)
          << "</td></tr>\n";
 
     html << "    <tr><td>2. LIB 库(.lib)规范预检</td><td>COFF架构/库类型/接口符号</td><td>"
@@ -610,6 +640,24 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
         }
     }
     if (headerTotal == 0) html << "  <tr><td colspan=\"5\">未发现头文件</td></tr>\n";
+    html << "  </table>\n\n";
+    html << "  <h3>结构体重名、ODR 与命名空间污染检查</h3>\n"
+         << "  <table><tr><th>型号</th><th>类型</th><th>级别</th><th>符号</th><th>涉及文件</th><th>说明</th></tr>\n";
+    int conflictRows = 0;
+    for (const auto& issue : fleetReport.crossModelHeaderConflictReport.issues) {
+        std::string files;
+        for (size_t i = 0; i < issue.files.size(); ++i) {
+            if (i) files += "<br>";
+            files += issue.files[i];
+        }
+        html << "  <tr><td>跨型号/包级</td><td>" << issue.category
+             << "</td><td class=\"" << (issue.severity == "FAIL" ? "fail" : "warn")
+             << "\">" << issue.severity << "</td><td>" << issue.symbol
+             << "</td><td><code>" << files << "</code></td><td>" << issue.detail
+             << "</td></tr>\n";
+        ++conflictRows;
+    }
+    if (conflictRows == 0) html << "  <tr><td colspan=\"6\">未发现冲突或污染风险</td></tr>\n";
     html << "  </table>\n\n";
 
     html << "  <h2>4. LIB 库文件检查结果</h2>\n"
@@ -782,6 +830,10 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
             html << "    <div>[" << tag << "/Scan] " << logMsg << "</div>\n";
             anyLog = true;
         }
+    }
+    for (const auto& logMsg : fleetReport.crossModelHeaderConflictReport.logMessages) {
+        html << "    <div>[HeaderConflict] " << logMsg << "</div>\n";
+        anyLog = true;
     }
     for (const auto& logMsg : fleetReport.multiModelReport.logMessages) {
         html << "    <div>[MultiModel] " << logMsg << "</div>\n";

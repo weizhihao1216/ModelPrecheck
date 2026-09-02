@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <set>
+#include <map>
 
 static std::string DetectFileEncoding(const std::string& buffer) {
     if (buffer.size() >= 3 &&
@@ -465,6 +466,262 @@ HeaderAnalysisReport HeaderAnalyzer::AnalyzeHeader(const std::string& headerPath
     }
 
     report.overallPass = true;
+    return report;
+}
+
+namespace {
+
+struct ParsedHeaderType {
+    std::string name;
+    std::string qualifiedName;
+    std::string kind;
+    std::string normalizedBody;
+    std::string file;
+    size_t bodyBegin = 0;
+    size_t bodyEnd = 0;
+    bool globalScope = true;
+};
+
+std::string StripCommentsAndLiterals(const std::string& input) {
+    std::string out(input.size(), ' ');
+    enum class State { Code, LineComment, BlockComment, String, Character };
+    State state = State::Code;
+    bool escaped = false;
+    for (size_t i = 0; i < input.size(); ++i) {
+        const char ch = input[i];
+        const char next = i + 1 < input.size() ? input[i + 1] : '\0';
+        if (state == State::Code) {
+            if (ch == '/' && next == '/') {
+                state = State::LineComment;
+                ++i;
+            } else if (ch == '/' && next == '*') {
+                state = State::BlockComment;
+                ++i;
+            } else if (ch == '"') {
+                state = State::String;
+                escaped = false;
+            } else if (ch == '\'') {
+                state = State::Character;
+                escaped = false;
+            } else {
+                out[i] = ch;
+            }
+        } else if (state == State::LineComment) {
+            if (ch == '\n') {
+                out[i] = ch;
+                state = State::Code;
+            }
+        } else if (state == State::BlockComment) {
+            if (ch == '*' && next == '/') {
+                ++i;
+                state = State::Code;
+            } else if (ch == '\n') {
+                out[i] = ch;
+            }
+        } else {
+            if (ch == '\n') out[i] = ch;
+            if (!escaped && ((state == State::String && ch == '"')
+                || (state == State::Character && ch == '\''))) {
+                state = State::Code;
+            }
+            escaped = (!escaped && ch == '\\');
+            if (ch != '\\') escaped = false;
+        }
+    }
+    return out;
+}
+
+size_t MatchingBrace(const std::string& text, size_t opening) {
+    int depth = 0;
+    for (size_t i = opening; i < text.size(); ++i) {
+        if (text[i] == '{') ++depth;
+        else if (text[i] == '}' && --depth == 0) return i;
+    }
+    return std::string::npos;
+}
+
+std::string NamespaceAt(const std::string& text, size_t position) {
+    struct Scope { std::string name; };
+    std::vector<Scope> scopes;
+    size_t cursor = 0;
+    while (cursor < position) {
+        const bool boundaryBefore = cursor == 0
+            || !std::isalnum(static_cast<unsigned char>(text[cursor - 1]));
+        if (boundaryBefore && text.compare(cursor, 9, "namespace") == 0
+            && cursor + 9 < position
+            && std::isspace(static_cast<unsigned char>(text[cursor + 9]))) {
+            size_t current = cursor + 9;
+            while (current < position
+                && std::isspace(static_cast<unsigned char>(text[current]))) ++current;
+            size_t nameBegin = current;
+            while (current < position
+                && (std::isalnum(static_cast<unsigned char>(text[current]))
+                    || text[current] == '_')) ++current;
+            const std::string name = text.substr(nameBegin, current - nameBegin);
+            while (current < position
+                && std::isspace(static_cast<unsigned char>(text[current]))) ++current;
+            if (!name.empty() && current < position && text[current] == '{') {
+                scopes.push_back({ name });
+                cursor = current + 1;
+                continue;
+            }
+        }
+        const char ch = text[cursor];
+        if (ch == '{') scopes.push_back({ std::string() });
+        else if (ch == '}' && !scopes.empty()) scopes.pop_back();
+        ++cursor;
+    }
+    std::string result;
+    for (const auto& scope : scopes) {
+        if (!scope.name.empty()) {
+            if (!result.empty()) result += "::";
+            result += scope.name;
+        }
+    }
+    return result;
+}
+
+std::string NormalizeTokens(const std::string& text) {
+    std::string result;
+    for (char ch : text) {
+        if (!std::isspace(static_cast<unsigned char>(ch))) result.push_back(ch);
+    }
+    return result;
+}
+
+} // namespace
+
+HeaderConflictReport HeaderAnalyzer::AnalyzeHeaderSet(
+    const std::vector<std::string>& headerPaths) {
+    HeaderConflictReport report;
+    std::vector<ParsedHeaderType> allTypes;
+
+    for (const std::string& path : headerPaths) {
+        std::ifstream file(path, std::ios::binary);
+        if (!file.is_open()) {
+            report.logMessages.push_back("WARN: 冲突分析无法打开头文件: " + path);
+            continue;
+        }
+        std::stringstream stream;
+        stream << file.rdbuf();
+        const std::string code = StripCommentsAndLiterals(stream.str());
+
+        std::regex typeRegex(
+            R"(\b(struct|class|union|enum(?:\s+class)?)\s+([A-Za-z_]\w*)\s*(?:\:[^{;]*)?\{)");
+        for (std::sregex_iterator it(code.begin(), code.end(), typeRegex), end; it != end; ++it) {
+            const size_t declaration = static_cast<size_t>(it->position());
+            const size_t opening = declaration + static_cast<size_t>(it->length()) - 1;
+            const size_t closing = MatchingBrace(code, opening);
+            if (closing == std::string::npos) continue;
+            const std::string nameSpace = NamespaceAt(code, declaration);
+            ParsedHeaderType type;
+            type.kind = (*it)[1].str();
+            type.name = (*it)[2].str();
+            type.qualifiedName = nameSpace.empty() ? ("::" + type.name)
+                                                   : (nameSpace + "::" + type.name);
+            type.normalizedBody = NormalizeTokens(code.substr(opening, closing - opening + 1));
+            type.file = path;
+            type.bodyBegin = opening;
+            type.bodyEnd = closing;
+            type.globalScope = nameSpace.empty();
+            allTypes.push_back(type);
+
+            if (type.globalScope) {
+                HeaderConflictIssue issue;
+                issue.category = "NAMESPACE_POLLUTION";
+                issue.severity = "WARNING";
+                issue.symbol = type.name;
+                issue.files.push_back(path);
+                issue.detail = type.kind + " " + type.name
+                    + " 定义在全局命名空间，集成多个模型时存在名称污染风险";
+                report.issues.push_back(issue);
+                ++report.namespacePollutionCount;
+            }
+        }
+
+        std::regex usingNamespaceRegex(R"(\busing\s+namespace\s+([A-Za-z_][\w:]*)\s*;)");
+        for (std::sregex_iterator it(code.begin(), code.end(), usingNamespaceRegex), end; it != end; ++it) {
+            HeaderConflictIssue issue;
+            issue.category = "NAMESPACE_POLLUTION";
+            issue.severity = "WARNING";
+            issue.symbol = (*it)[1].str();
+            issue.files.push_back(path);
+            issue.detail = "头文件使用 using namespace，会把命名空间成员引入所有包含该头文件的编译单元";
+            report.issues.push_back(issue);
+            ++report.namespacePollutionCount;
+        }
+
+        std::regex useNamespaceMacro(R"(\b([A-Z][A-Z0-9_]*_USE_NAMESPACE)\b)");
+        for (std::sregex_iterator it(code.begin(), code.end(), useNamespaceMacro), end; it != end; ++it) {
+            HeaderConflictIssue issue;
+            issue.category = "NAMESPACE_POLLUTION";
+            issue.severity = "WARNING";
+            issue.symbol = (*it)[1].str();
+            issue.files.push_back(path);
+            issue.detail = "头文件中的命名空间展开宏可能污染包含者的全局作用域";
+            report.issues.push_back(issue);
+            ++report.namespacePollutionCount;
+        }
+
+        std::regex functionBodyRegex(
+            R"((^|[\r\n])\s*(?!inline\b|static\b|constexpr\b|template\b)([A-Za-z_][\w:<>,\s*&~]*?)\s+([A-Za-z_]\w*)\s*\([^;{}]*\)\s*\{)");
+        for (std::sregex_iterator it(code.begin(), code.end(), functionBodyRegex), end; it != end; ++it) {
+            const size_t position = static_cast<size_t>(it->position());
+            bool insideType = false;
+            for (const auto& type : allTypes) {
+                if (type.file == path && position > type.bodyBegin && position < type.bodyEnd) {
+                    insideType = true;
+                    break;
+                }
+            }
+            if (insideType) continue;
+            HeaderConflictIssue issue;
+            issue.category = "ODR_CONFLICT";
+            issue.severity = "FAIL";
+            issue.symbol = (*it)[3].str();
+            issue.files.push_back(path);
+            issue.detail = "头文件中定义了非 inline/static 的函数体，多翻译单元包含时可能违反 ODR";
+            report.issues.push_back(issue);
+            ++report.odrConflictCount;
+        }
+    }
+
+    std::map<std::string, std::vector<const ParsedHeaderType*>> byQualifiedName;
+    for (const auto& type : allTypes) byQualifiedName[type.qualifiedName].push_back(&type);
+    for (const auto& entry : byQualifiedName) {
+        std::set<std::string> files;
+        std::set<std::string> bodies;
+        for (const auto* type : entry.second) {
+            files.insert(type->file);
+            bodies.insert(type->normalizedBody);
+        }
+        if (entry.second.size() < 2) continue;
+        HeaderConflictIssue issue;
+        issue.symbol = entry.first;
+        issue.files.assign(files.begin(), files.end());
+        if (bodies.size() > 1) {
+            issue.category = "ODR_CONFLICT";
+            issue.severity = "FAIL";
+            issue.detail = "同名类型在多个头文件中具有不同定义，属于疑似 ODR 冲突";
+            ++report.odrConflictCount;
+        } else {
+            issue.category = "DUPLICATE_TYPE";
+            issue.severity = "FAIL";
+            issue.detail = "同名类型在多个头文件中重复定义，合并包含时可能发生重定义";
+            ++report.duplicateTypeCount;
+        }
+        report.issues.push_back(issue);
+    }
+
+    report.overallPass = report.duplicateTypeCount == 0 && report.odrConflictCount == 0;
+    report.logMessages.push_back(
+        "INFO: 头文件集合冲突检查完成，重复类型=" + std::to_string(report.duplicateTypeCount)
+        + "，ODR 冲突=" + std::to_string(report.odrConflictCount)
+        + "，命名空间污染风险=" + std::to_string(report.namespacePollutionCount));
+    for (const auto& issue : report.issues) {
+        report.logMessages.push_back(issue.severity + ": [" + issue.category + "] "
+            + issue.symbol + " - " + issue.detail);
+    }
     return report;
 }
 

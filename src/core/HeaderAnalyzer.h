@@ -43,9 +43,27 @@ struct HeaderAnalysisReport {
     std::vector<std::string> logMessages;
 };
 
+struct HeaderConflictIssue {
+    std::string category;   // DUPLICATE_TYPE / ODR_CONFLICT / NAMESPACE_POLLUTION
+    std::string severity;   // FAIL / WARNING
+    std::string symbol;
+    std::vector<std::string> files;
+    std::string detail;
+};
+
+struct HeaderConflictReport {
+    int duplicateTypeCount = 0;
+    int odrConflictCount = 0;
+    int namespacePollutionCount = 0;
+    bool overallPass = true;
+    std::vector<HeaderConflictIssue> issues;
+    std::vector<std::string> logMessages;
+};
+
 class HeaderAnalyzer {
 public:
     static HeaderAnalysisReport AnalyzeHeader(const std::string& headerPath);
+    static HeaderConflictReport AnalyzeHeaderSet(const std::vector<std::string>& headerPaths);
     static std::vector<std::string> ExtractDeclaredFunctions(const std::string& headerContent);
     static std::vector<HeaderFunctionDecl> ExtractFunctionDeclarations(const std::string& headerContent);
     static CallSignature ClassifyCallSignature(const std::string& returnType,
