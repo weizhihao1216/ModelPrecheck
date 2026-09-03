@@ -32,11 +32,20 @@ public:
     void setEmptyHint(const QString& hint);
     void clearPoints();
     int pointCount() const;
+    /** When true, widget height tracks width (square plot area). */
+    void setKeepSquare(bool keepSquare);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+    bool hasHeightForWidth() const override;
+    int heightForWidth(int width) const override;
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
 
 private:
+    void applySquareConstraints();
+
     QPointF toScreen(double lon, double lat,
                      double minLon, double maxLon,
                      double minLat, double maxLat,
@@ -45,6 +54,7 @@ private:
     QVector<TrajectoryPoint> m_points;
     QVector<TrajectorySeries> m_series;
     int m_highlightedObject = -1;
+    bool m_keepSquare = false;
     QString m_emptyHint =
         QStringLiteral("暂无轨迹点\n请先编译型号，再点击「试跑并绘制轨迹」\n"
                        "UserMain 中需用 out_lat/out_lon 调用 RecordTrajectoryPoint");

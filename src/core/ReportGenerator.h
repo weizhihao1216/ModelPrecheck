@@ -11,6 +11,7 @@
 #include "ConcurrencyTester.h"
 #include "PackageScanner.h"
 #include "SingleThreadMultiObjectTester.h"
+#include "FleetSingleThreadMultiObjectTester.h"
 #include "InterfaceMappingProfile.h"
 
 struct ModelMultiObjectReport {
@@ -75,6 +76,7 @@ struct FleetSessionReport {
     int trajectoryModelsTested = 0;
     int trajectoryModelsPassed = 0;
     std::vector<ModelMultiObjectReport> multiObjectReports;
+    FleetMultiObjectTestReport fleetMultiObjectReport;
     bool overallPass = false;
 };
 

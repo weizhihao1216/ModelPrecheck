@@ -1,0 +1,6 @@
+add_library(CompatibleWeaponG SHARED compatible_weapon_g.cpp)
+target_compile_definitions(CompatibleWeaponG PRIVATE COMPATIBLE_WEAPON_G_EXPORTS)
+if(MSVC)
+    target_compile_options(CompatibleWeaponG PRIVATE /utf-8)
+endif()
+target_include_directories(CompatibleWeaponG PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

@@ -52,6 +52,19 @@ public:
     bool Run(const MultiObjectTestConfig& config, const RandomValueBlob& values,
              MultiObjectTestReport& report, std::string& error) const;
 
+    /// Host-driven object session (for cross-model interleaving).
+    /// Direct-model mode always supports this; user-pool mode requires MoPool_* exports
+    /// (recompile multi-object Harness after upgrading the tool).
+    bool SupportsObjectSession() const;
+    bool PrepareObjectSession(const RandomValueBlob& values, int objectCount, double dt,
+                              std::string& error);
+    void* CreateLiveObject(int objectId, unsigned long* exceptionCode) const;
+    int InitLiveObject(void* object, int objectId, unsigned long* exceptionCode) const;
+    int StepLiveObject(void* object, int objectId, int stepIndex,
+                       double* outLat, double* outLon,
+                       unsigned long* exceptionCode) const;
+    void DestroyLiveObject(void* object, int objectId, unsigned long* exceptionCode) const;
+
     static std::string DefaultAdapterTemplate();
     static std::string DefaultUserMultiObjectTemplate();
 
@@ -76,6 +89,11 @@ private:
                                      int*, double*, const char**, int*, int*);
     typedef int (*FnGetTrackPoint)(int, int, int, double*, double*);
     typedef double (*FnGetMetric)();
+    typedef int (*FnMoPoolPrepare)(const double*, int, const int*, int, int, double);
+    typedef void* (*FnMoPoolCreate)(int);
+    typedef int (*FnMoPoolInit)(void*, int, unsigned long*);
+    typedef int (*FnMoPoolStep)(void*, int, int, double*, double*, unsigned long*);
+    typedef void (*FnMoPoolDestroy)(void*, int, unsigned long*);
 
     HMODULE m_hModule = NULL;
     std::string m_dllPath;
@@ -85,11 +103,22 @@ private:
     FnGetObjectResult m_pfnGetResult = nullptr;
     FnGetTrackPoint m_pfnGetTrackPoint = nullptr;
     FnGetMetric m_pfnGetMaxFrameMs = nullptr;
+    FnMoPoolPrepare m_pfnMoPoolPrepare = nullptr;
+    FnMoPoolCreate m_pfnMoPoolCreate = nullptr;
+    FnMoPoolInit m_pfnMoPoolInit = nullptr;
+    FnMoPoolStep m_pfnMoPoolStep = nullptr;
+    FnMoPoolDestroy m_pfnMoPoolDestroy = nullptr;
     FnModelCreate m_pfnCreate = nullptr;
     FnModelInitEx m_pfnInitEx = nullptr;
     FnModelStepEx m_pfnStepEx = nullptr;
     FnModelDestroyEx m_pfnDestroyEx = nullptr;
     bool m_directModelMode = false;
+
+    mutable RandomValueBlob m_sessionValues;
+    mutable int m_sessionObjectCount = 0;
+    mutable double m_sessionDt = 0.02;
+
+    WeaponModelParams BuildDirectParams(int objectId) const;
 };
 
 #endif // MULTI_OBJECT_HARNESS_H

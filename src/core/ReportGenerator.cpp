@@ -913,6 +913,39 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
         html << "  </div>\n";
     }
 
+    html << "  <h2>10b. 跨型号单线程对象交错</h2>\n";
+    {
+        const auto& fleetMo = fleetReport.fleetMultiObjectReport;
+        if (fleetMo.verdict.empty()) {
+            html << "  <div class=\"card\"><p class=\"warn\">N/A — 未执行跨型号对象交错测试"
+                    "（与「多型号并行」不同：本项为单线程、对象 Step 级交错）</p></div>\n";
+        } else {
+            html << "  <div class=\"card\"><p>型号数: " << fleetMo.modelCount
+                 << " | 对象总数: " << fleetMo.totalObjectCount
+                 << " | 步数: " << fleetMo.stepCount
+                 << " | 最大偏差: " << fleetMo.maxPositionDeviation
+                 << " | 容差: " << fleetMo.tolerance
+                 << " | 最大单帧: " << fleetMo.maxFrameTimeMs << " ms"
+                 << " | 内存变化: " << fleetMo.memoryDeltaMB << " MB</p>\n"
+                 << "  <p class=\"" << (fleetMo.verdict == "PASS" ? "pass" : "fail")
+                 << "\">" << fleetMo.verdict << " — " << fleetMo.summary << "</p>\n"
+                 << "  <table><tr><th>全局对象</th><th>型号</th><th>局部对象</th>"
+                 << "<th>基线点</th><th>交错点</th><th>最大偏差</th>"
+                 << "<th>返回码(基线/交错)</th><th>说明</th></tr>\n";
+            for (const auto& object : fleetMo.objectResults) {
+                const auto& d = object.detail;
+                html << "  <tr><td>#" << object.globalObjectId << "</td><td>"
+                     << object.modelName << "</td><td>#" << object.localObjectId
+                     << "</td><td>" << d.baselineTrajectory.size() << "</td><td>"
+                     << d.interleavedTrajectory.size() << "</td><td>"
+                     << d.maxPositionDeviation << "</td><td>"
+                     << d.baselineReturnCode << " / " << d.interleavedReturnCode
+                     << "</td><td>" << d.detail << "</td></tr>\n";
+            }
+            html << "  </table></div>\n";
+        }
+    }
+
     // 11. 日志
     html << "  <h2>11. 预检过程日志追踪</h2>\n"
          << "  <div class=\"log-box\">\n";

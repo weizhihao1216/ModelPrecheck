@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <cstring>
 #include <set>
 
 #ifndef NOMINMAX
@@ -23,7 +24,8 @@ std::string UserCodeHarness::DefaultUserMainTemplate() {
     return
         "// 写完整生命周期即可。压测 / 多线程 / 多型号并发都会直接调用本函数。\n"
         "// 多型号：每种弹各自编译一份 UserMain（头文件/DLL 可不同），再按数量并行一起跑。\n"
-        "// 授权文件请与第三方 .dll 放在同一模型包目录（与 DLL 平级）。\n"
+        "// 授权文件请与 models/ 下的第三方 .dll 同级放置。\n"
+        "// 模型包目录结构：根目录/include（头文件）、根目录/lib（.lib）、根目录/models（.dll）。\n"
         "// 每步用 out_lat / out_lon 接收经纬度，并 RecordTrajectoryPoint 供二维轨迹预览。\n"
         "// 样例模型包：dist/sample_models/PrecheckDemoWeapon（Model_Create/Init/Step/Destroy）\n"
         "\n"
@@ -204,7 +206,78 @@ static std::wstring Utf8ToWide(const std::string& utf8) {
     return w;
 }
 
+/** Copy *.dll under searchDirs into destDir so LoadLibrary(ALTERED_PATH) finds deps.
+ *  Never overwrite harnessDllPath (same basename as model DLL is a common collision). */
+static void CopyDependencyDllsBesideHarness(const std::vector<std::string>& searchDirs,
+                                            const std::string& destDir,
+                                            const std::string& harnessDllPath,
+                                            std::string& log) {
+    if (destDir.empty()) return;
+    std::string harnessName;
+    {
+        const size_t slash = harnessDllPath.find_last_of("/\\");
+        harnessName = (slash == std::string::npos)
+            ? harnessDllPath : harnessDllPath.substr(slash + 1);
+    }
+    std::set<std::string> copiedNames;
+    for (const auto& root : searchDirs) {
+        if (root.empty()) continue;
+        std::vector<std::string> stack;
+        stack.push_back(root);
+        int visited = 0;
+        while (!stack.empty() && visited < 64) {
+            const std::string dir = stack.back();
+            stack.pop_back();
+            ++visited;
+            WIN32_FIND_DATAA data{};
+            const std::string pattern = dir + "\\*";
+            HANDLE find = FindFirstFileA(pattern.c_str(), &data);
+            if (find == INVALID_HANDLE_VALUE) continue;
+            do {
+                if (strcmp(data.cFileName, ".") == 0 || strcmp(data.cFileName, "..") == 0)
+                    continue;
+                const std::string full = dir + "\\" + data.cFileName;
+                if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                    if (visited < 64) stack.push_back(full);
+                    continue;
+                }
+                const char* ext = strrchr(data.cFileName, '.');
+                if (!ext || _stricmp(ext, ".dll") != 0) continue;
+                if (!harnessName.empty() && _stricmp(data.cFileName, harnessName.c_str()) == 0) {
+                    log += "INFO: 跳过与 Harness 同名的模型 DLL（避免覆盖）: ";
+                    log += data.cFileName;
+                    log += "\n";
+                    continue;
+                }
+                if (!copiedNames.insert(data.cFileName).second) continue;
+                const std::string dest = destDir + "\\" + data.cFileName;
+                if (!harnessDllPath.empty()
+                    && _stricmp(dest.c_str(), harnessDllPath.c_str()) == 0) {
+                    continue;
+                }
+                if (CopyFileA(full.c_str(), dest.c_str(), FALSE)) {
+                    log += "INFO: 已复制依赖 DLL 到 Harness 目录: ";
+                    log += data.cFileName;
+                    log += "\n";
+                }
+            } while (FindNextFileA(find, &data));
+            FindClose(find);
+        }
+    }
+}
+
 void UserCodeHarness::ApplyDllSearchPaths() const {
+    // Prefer a directory that actually contains .dll (models/), not only .lib.
+    for (const auto& dir : m_dllSearchDirs) {
+        WIN32_FIND_DATAA data{};
+        const std::string pattern = dir + "\\*.dll";
+        HANDLE find = FindFirstFileA(pattern.c_str(), &data);
+        if (find != INVALID_HANDLE_VALUE) {
+            FindClose(find);
+            SetDllDirectoryA(dir.c_str());
+            return;
+        }
+    }
     if (!m_dllSearchDirs.empty()) {
         SetDllDirectoryA(m_dllSearchDirs.front().c_str());
     }
@@ -411,6 +484,8 @@ CompileResult UserCodeHarness::Compile(const UserHarnessConfig& config) {
         return result;
     }
 
+    CopyDependencyDllsBesideHarness(m_dllSearchDirs, work, dllPath, result.log);
+
     std::string err;
     if (!LoadCompiledDll(dllPath, err)) {
         result.log += err;
@@ -438,7 +513,7 @@ bool UserCodeHarness::LoadCompiledDll(const std::string& dllPath, std::string& e
     }
     if (!m_hModule) {
         err = "LoadLibrary 失败, GetLastError=" + std::to_string(GetLastError())
-            + "（请确认模型 .dll 在包目录或搜索路径中）\n";
+            + "（请确认 models/ 下的第三方 .dll 存在；工具会尝试复制到 Harness 输出目录）\n";
         return false;
     }
     m_pfnRun = reinterpret_cast<FnRunUserTest>(GetProcAddress(m_hModule, "RunUserTest"));

@@ -5,19 +5,32 @@
 - **UserMain** 性能、轨迹、多线程等测试  
 - **单线程多对象**（MoCreate / MoInit / MoStep / MoDestroy）
 
-## 目录内容
+## 目录结构（必须）
 
-| 文件 | 说明 |
+第三方模型包须按以下固定目录归放（子目录会递归扫描）：
+
+```
+PrecheckDemoWeapon/
+  include/          # 头文件 .h / .hpp
+    WeaponModel.h
+    WeaponObject.h
+  lib/              # .lib
+    PrecheckDemoWeapon.lib
+  models/           # .dll
+    PrecheckDemoWeapon.dll
+```
+
+| 路径 | 说明 |
 |------|------|
-| `PrecheckDemoWeapon.dll` | 模型动态库 |
-| `PrecheckDemoWeapon.lib` | 链接库（编译 UserMain / 多对象 Harness 时需要） |
-| `WeaponModel.h` | C 接口：`Model_Create` / `Model_Init` / `Model_Step` / `Model_Destroy` |
-| `WeaponObject.h` | C++ 封装类（头文件内联，无需 .cpp） |
+| `include/WeaponModel.h` | C 接口：`Model_Create` / `Model_Init` / `Model_Step` / `Model_Destroy` |
+| `include/WeaponObject.h` | C++ 封装类（头文件内联，无需 .cpp） |
+| `lib/PrecheckDemoWeapon.lib` | 链接库（编译 UserMain / 多对象 Harness 时需要） |
+| `models/PrecheckDemoWeapon.dll` | 模型动态库 |
 
 ## 在预检工具中使用
 
-1. 点击 **添加型号**，模型包路径选择**本文件夹**（含 dll 与 lib 的目录）。  
-2. 在 **型号与 UserMain** 中勾选：`WeaponModel.h`、`WeaponObject.h`（至少勾选 `WeaponModel.h`）。  
+1. 点击 **添加型号**，模型包路径选择**本文件夹根目录**（含 `include` / `lib` / `models` 的目录）。  
+2. 在 **型号与 UserMain** 中勾选：`include/WeaponModel.h`、`include/WeaponObject.h`（至少勾选 `WeaponModel.h`）。  
 3. **UserMain** 与 **单线程多对象** 使用下面示例代码，分别 **编译** 后运行测试。
 
 ## UserMain 示例

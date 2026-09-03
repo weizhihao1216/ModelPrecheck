@@ -1,6 +1,7 @@
 #include "TrajectoryViewWidget.h"
 #include <QPainter>
 #include <QPaintEvent>
+#include <QResizeEvent>
 #include <QSizePolicy>
 #include <QtMath>
 #include <algorithm>
@@ -8,10 +9,53 @@
 
 TrajectoryViewWidget::TrajectoryViewWidget(QWidget* parent)
     : QWidget(parent) {
-    setMinimumSize(320, 240);
+    setMinimumSize(240, 240);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setBackgroundRole(QPalette::Base);
     setAutoFillBackground(true);
+}
+
+void TrajectoryViewWidget::setKeepSquare(bool keepSquare) {
+    if (m_keepSquare == keepSquare) return;
+    m_keepSquare = keepSquare;
+    QSizePolicy policy(QSizePolicy::Expanding,
+                       keepSquare ? QSizePolicy::Fixed : QSizePolicy::Expanding);
+    policy.setHeightForWidth(keepSquare);
+    setSizePolicy(policy);
+    if (!keepSquare) {
+        setMinimumHeight(240);
+        setMaximumHeight(QWIDGETSIZE_MAX);
+    }
+    applySquareConstraints();
+    updateGeometry();
+}
+
+void TrajectoryViewWidget::applySquareConstraints() {
+    if (!m_keepSquare) return;
+    const int side = qMax(240, width() > 0 ? width() : sizeHint().width());
+    setMinimumHeight(side);
+    setMaximumHeight(side);
+}
+
+bool TrajectoryViewWidget::hasHeightForWidth() const {
+    return m_keepSquare;
+}
+
+int TrajectoryViewWidget::heightForWidth(int width) const {
+    return m_keepSquare ? qMax(240, width) : QWidget::heightForWidth(width);
+}
+
+QSize TrajectoryViewWidget::sizeHint() const {
+    return m_keepSquare ? QSize(360, 360) : QSize(320, 240);
+}
+
+QSize TrajectoryViewWidget::minimumSizeHint() const {
+    return m_keepSquare ? QSize(240, 240) : QSize(240, 180);
+}
+
+void TrajectoryViewWidget::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    applySquareConstraints();
 }
 
 void TrajectoryViewWidget::setPoints(const QVector<TrajectoryPoint>& points) {

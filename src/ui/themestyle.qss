@@ -3290,3 +3290,17 @@ QListWidget[testNavigation="true"]::item:hover {
     border-bottom-color: #fbbf24;
 }
 
+/* UserMain 页：Harness 状态单行定高；随机变量表行高固定 */
+QLabel#harnessStatusLabel {
+    max-height: 28px;
+    min-height: 28px;
+    padding: 0 4px;
+    color: #94a3b8;
+}
+QTableWidget#randomVarsTable {
+    gridline-color: #2d3f4f;
+}
+QTableWidget#randomVarsTable::item {
+    padding: 2px 4px;
+}
+

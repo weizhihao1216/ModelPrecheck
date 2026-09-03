@@ -82,6 +82,8 @@ set(SOURCES
     src/core/InterfaceMappingProfile.cpp
     src/core/SingleThreadMultiObjectTester.h
     src/core/SingleThreadMultiObjectTester.cpp
+    src/core/FleetSingleThreadMultiObjectTester.h
+    src/core/FleetSingleThreadMultiObjectTester.cpp
     src/core/ReportGenerator.h
     src/core/ReportGenerator.cpp
     src/ui/LogConsoleWidget.h
@@ -120,6 +122,8 @@ add_subdirectory(sample_models/ConflictWeaponB)
 add_subdirectory(sample_models/CompatibleWeaponC)
 add_subdirectory(sample_models/CompatibleWeaponD)
 add_subdirectory(sample_models/CompatibleWeaponE)
+add_subdirectory(sample_models/CompatibleWeaponF)
+add_subdirectory(sample_models/CompatibleWeaponG)
 add_subdirectory(sample_models/RenamedInterfaceWeapon)
 add_subdirectory(sample_models/PrecheckDemoWeapon)
 
@@ -143,25 +147,73 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
 endif()
 
 install(TARGETS ModelValidator DESTINATION .)
-install(TARGETS StandardWeapon FaultyWeapon MultiInstanceWeapon RenamedInterfaceWeapon
-                ConflictWeaponA ConflictWeaponB CompatibleWeaponC CompatibleWeaponD CompatibleWeaponE
-        DESTINATION sample_models)
+
+# Each sample model package uses fixed layout: include/ + lib/ + models/
+set(_SAMPLE_MODELS
+    StandardWeapon
+    FaultyWeapon
+    MultiInstanceWeapon
+    RenamedInterfaceWeapon
+    ConflictWeaponA
+    ConflictWeaponB
+    CompatibleWeaponC
+    CompatibleWeaponD
+    CompatibleWeaponE
+)
+foreach(_model IN LISTS _SAMPLE_MODELS)
+    install(TARGETS ${_model}
+            RUNTIME DESTINATION sample_models/${_model}/models
+            ARCHIVE DESTINATION sample_models/${_model}/lib
+            LIBRARY DESTINATION sample_models/${_model}/models)
+endforeach()
+
 install(TARGETS PrecheckDemoWeapon
-        RUNTIME DESTINATION sample_models/PrecheckDemoWeapon
-        ARCHIVE DESTINATION sample_models/PrecheckDemoWeapon
-        LIBRARY DESTINATION sample_models/PrecheckDemoWeapon)
+        RUNTIME DESTINATION sample_models/PrecheckDemoWeapon/models
+        ARCHIVE DESTINATION sample_models/PrecheckDemoWeapon/lib
+        LIBRARY DESTINATION sample_models/PrecheckDemoWeapon/models)
 install(FILES
         sample_models/PrecheckDemoWeapon/WeaponModel.h
         sample_models/PrecheckDemoWeapon/WeaponObject.h
-        sample_models/PrecheckDemoWeapon/README.md
+        DESTINATION sample_models/PrecheckDemoWeapon/include)
+install(FILES sample_models/PrecheckDemoWeapon/README.md
         DESTINATION sample_models/PrecheckDemoWeapon)
-install(FILES sample_models/StandardWeapon/WeaponModel.h DESTINATION sample_models)
-install(FILES sample_models/MultiInstanceWeapon/WeaponModel.h DESTINATION sample_models RENAME WeaponModel_MultiInstance.h)
-install(FILES sample_models/RenamedInterfaceWeapon/WeaponModel.h DESTINATION sample_models RENAME WeaponModel_Renamed.h)
-install(FILES sample_models/ConflictWeaponA/WeaponModel.h DESTINATION sample_models RENAME WeaponModel_ConflictA.h)
-install(FILES sample_models/ConflictWeaponB/WeaponModel.h DESTINATION sample_models RENAME WeaponModel_ConflictB.h)
-install(FILES sample_models/CompatibleWeaponC/WeaponModel.h DESTINATION sample_models RENAME WeaponModel_CompatibleC.h)
-install(FILES sample_models/CompatibleWeaponD/WeaponModel.h DESTINATION sample_models RENAME WeaponModel_CompatibleD.h)
-install(FILES sample_models/CompatibleWeaponE/WeaponModel.h DESTINATION sample_models RENAME WeaponModel_CompatibleE.h)
-install(FILES src/ui/themestyle.qss DESTINATION .)
 
+install(FILES sample_models/StandardWeapon/WeaponModel.h
+        DESTINATION sample_models/StandardWeapon/include)
+install(FILES sample_models/MultiInstanceWeapon/WeaponModel.h
+        DESTINATION sample_models/MultiInstanceWeapon/include)
+install(FILES sample_models/MultiInstanceWeapon/WeaponObject.h
+        DESTINATION sample_models/MultiInstanceWeapon/include)
+install(FILES sample_models/RenamedInterfaceWeapon/WeaponModel.h
+        DESTINATION sample_models/RenamedInterfaceWeapon/include)
+install(FILES sample_models/ConflictWeaponA/WeaponModel.h
+        DESTINATION sample_models/ConflictWeaponA/include)
+install(FILES sample_models/ConflictWeaponB/WeaponModel.h
+        DESTINATION sample_models/ConflictWeaponB/include)
+install(FILES sample_models/CompatibleWeaponC/WeaponModel.h
+        DESTINATION sample_models/CompatibleWeaponC/include)
+install(FILES sample_models/CompatibleWeaponD/WeaponModel.h
+        DESTINATION sample_models/CompatibleWeaponD/include)
+install(TARGETS CompatibleWeaponF
+        RUNTIME DESTINATION sample_models/CompatibleWeaponF/models
+        ARCHIVE DESTINATION sample_models/CompatibleWeaponF/lib
+        LIBRARY DESTINATION sample_models/CompatibleWeaponF/models)
+install(FILES
+        sample_models/CompatibleWeaponF/WeaponModel.h
+        sample_models/CompatibleWeaponF/WeaponObject.h
+        DESTINATION sample_models/CompatibleWeaponF/include)
+install(FILES sample_models/CompatibleWeaponF/README.md
+        DESTINATION sample_models/CompatibleWeaponF)
+
+install(TARGETS CompatibleWeaponG
+        RUNTIME DESTINATION sample_models/CompatibleWeaponG/models
+        ARCHIVE DESTINATION sample_models/CompatibleWeaponG/lib
+        LIBRARY DESTINATION sample_models/CompatibleWeaponG/models)
+install(FILES
+        sample_models/CompatibleWeaponG/WeaponModel.h
+        sample_models/CompatibleWeaponG/WeaponObject.h
+        DESTINATION sample_models/CompatibleWeaponG/include)
+install(FILES sample_models/CompatibleWeaponG/README.md
+        DESTINATION sample_models/CompatibleWeaponG)
+
+install(FILES src/ui/themestyle.qss DESTINATION .)

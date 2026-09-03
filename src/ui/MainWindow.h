@@ -28,6 +28,7 @@
 #include "../core/MultiObjectHarness.h"
 #include "../core/ReportGenerator.h"
 #include "../core/PackageScanner.h"
+#include "../core/FleetSingleThreadMultiObjectTester.h"
 
 #include "LogConsoleWidget.h"
 #include "CppCodeEditor.h"
@@ -72,6 +73,7 @@ public:
     void showBusyOverlay(const QString& text);
     void hideBusyOverlay();
     void setBusyOverlayText(const QString& text);
+    void showOverlayResult(const QString& text, bool success);
     void runBusyBlocking(const std::function<void()>& work);
 
 private slots:
@@ -89,8 +91,11 @@ private slots:
     void browseMultiObjectSource();
     void browseMultiObjectLib();
     void compileMultiObjectAdapter();
+    void compileAllMultiObjectAdapters();
     void runMultiObjectTest();
+    void runFleetMultiObjectTest();
     void onMultiObjectResultSelectionChanged();
+    void onFleetMultiObjectSelectionChanged();
     void runDllFileCheckOnly();
     void runDllLoadCheckOnly();
     void runHeaderCheckOnly();
@@ -137,6 +142,7 @@ private:
     void saveEditorsToCurrentModel();
     void loadEditorsFromModel(int index);
     void setEditorsEnabled(bool on);
+    void setHarnessStatusText(const QString& text, const QString& tone = QString());
     bool isModelPathValid(const FleetModelEntry& entry) const;
     bool isModelConfigured(const FleetModelEntry& entry) const;
     bool isModelCompiled(const FleetModelEntry& entry) const;
@@ -156,6 +162,8 @@ private:
     void saveMultiObjectEditor();
     void loadMultiObjectEditor(int modelIndex);
     void updateMultiObjectResultView(const MultiObjectTestReport& report);
+    void updateFleetMultiObjectResultView(const FleetMultiObjectTestReport& report);
+    void refreshFleetMultiObjectTable();
     bool isMultiObjectConfigured(const FleetModelEntry& entry) const;
     bool prepareMultiObjectHarness(FleetModelEntry& entry, int modelIndex);
     void rebuildMultiObjectMappingTables();
@@ -242,6 +250,7 @@ private:
     QPushButton* m_btnRunTrajectory;
     QWidget* m_perfOptionsPanel;
     QWidget* m_trajectoryPanel;
+    QWidget* m_perfChartBottomSpacer = nullptr;
     QLabel* m_lblPerfPageHint;
     QLabel* m_lblPerfSummary;
     QLabel* m_lblTrajOut;
@@ -290,12 +299,17 @@ private:
     QDoubleSpinBox* m_spnMultiObjectTolerance;
     QComboBox* m_comboMultiObjectSchedule;
     QPushButton* m_btnCompileMultiObject;
+    QPushButton* m_btnCompileMultiObjectAll;
     QPushButton* m_btnRunMultiObject;
+    QPushButton* m_btnRunFleetMultiObject;
+    QTableWidget* m_tblFleetMultiObjectModels;
     QLabel* m_lblMultiObjectAdapterStatus;
     QLabel* m_lblMultiObjectResult;
     QTableWidget* m_tblMultiObjectResults;
     TrajectoryViewWidget* m_pMultiObjectTrajectory;
     int m_loadedMultiObjectModelIndex = -1;
+    bool m_showingFleetMultiObjectResults = false;
+    FleetMultiObjectTestReport m_latestFleetMultiObjectReport;
 
     // Report
     QTextBrowser* m_pReportBrowser;

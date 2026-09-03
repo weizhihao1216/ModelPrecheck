@@ -2,10 +2,11 @@
 #include "../utils/MemoryUtils.h"
 #include "../utils/QtEncoding.h"
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
-#include <QFileInfo>
 #include <QProcess>
+#include <QSet>
 #include <QStringList>
 #include <algorithm>
 #include <chrono>
@@ -33,6 +34,55 @@ std::wstring toWide(const std::string& value) {
     std::wstring result(size > 1 ? static_cast<size_t>(size - 1) : 0, L'\0');
     if (size > 1) MultiByteToWideChar(CP_UTF8, 0, value.c_str(), -1, &result[0], size);
     return result;
+}
+
+void CopyDependencyDllsBesideHarness(const std::vector<std::string>& searchDirs,
+                                     const QString& destDir,
+                                     const QString& harnessDllPath,
+                                     std::string& log) {
+    if (destDir.isEmpty()) return;
+    QDir().mkpath(destDir);
+    const QString harnessName = QFileInfo(harnessDllPath).fileName();
+    QSet<QString> copied;
+    for (const auto& root : searchDirs) {
+        if (root.empty()) continue;
+        QDirIterator it(qPath(root), QStringList() << QStringLiteral("*.dll"),
+                        QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            it.next();
+            const QFileInfo info = it.fileInfo();
+            if (!harnessName.isEmpty()
+                && info.fileName().compare(harnessName, Qt::CaseInsensitive) == 0) {
+                log += "INFO: 跳过与 Harness 同名的模型 DLL（避免覆盖）: "
+                     + qToUtf8(info.fileName()) + "\n";
+                continue;
+            }
+            if (copied.contains(info.fileName())) continue;
+            const QString dest = QDir(destDir).filePath(info.fileName());
+            if (!harnessDllPath.isEmpty()
+                && QFileInfo(dest) == QFileInfo(harnessDllPath)) {
+                continue;
+            }
+            if (QFile::exists(dest)) QFile::remove(dest);
+            if (QFile::copy(info.absoluteFilePath(), dest)) {
+                copied.insert(info.fileName());
+                log += "INFO: 已复制依赖 DLL 到 Harness 目录: "
+                     + qToUtf8(info.fileName()) + "\n";
+            }
+        }
+    }
+}
+
+void SetDllDirectoryPreferringModels(const std::vector<std::string>& searchDirs) {
+    for (const auto& dir : searchDirs) {
+        QDirIterator it(qPath(dir), QStringList() << QStringLiteral("*.dll"),
+                        QDir::Files, QDirIterator::Subdirectories);
+        if (it.hasNext()) {
+            SetDllDirectoryA(dir.c_str());
+            return;
+        }
+    }
+    if (!searchDirs.empty()) SetDllDirectoryA(searchDirs.front().c_str());
 }
 
 typedef int (*RunRaw)(const double*, int, const int*, int,
@@ -687,6 +737,66 @@ extern "C" __declspec(dllexport) int GetMultiObjectTrackPoint(
 extern "C" __declspec(dllexport) double GetMultiObjectMaxFrameMs() {
     return g_maxFrameMs;
 }
+
+static std::vector<RandomBag> g_sessionRandoms;
+static double g_sessionDt = 0.02;
+
+extern "C" __declspec(dllexport) int MoPool_Prepare(
+    const double* dvals, int nd, const int* ivals, int ni,
+    int objectCount, double dt) {
+    if (objectCount < 1 || dt <= 0.0) return -1;
+    g_sessionDt = dt;
+)CPP";
+    source << GeneratePerObjectRandomPreamble();
+    source << R"CPP(
+    g_sessionRandoms = std::move(objectRandoms);
+    return 0;
+}
+
+extern "C" __declspec(dllexport) void* MoPool_Create(int objectId) {
+    if (objectId < 0 || objectId >= static_cast<int>(g_sessionRandoms.size())) return nullptr;
+    return MoCreate(objectId, g_sessionRandoms[static_cast<size_t>(objectId)]);
+}
+
+extern "C" __declspec(dllexport) int MoPool_Init(void* object, int objectId,
+                                                 unsigned long* exceptionCode) {
+    if (exceptionCode) *exceptionCode = 0;
+    if (!object || objectId < 0 || objectId >= static_cast<int>(g_sessionRandoms.size()))
+        return -1;
+    using MoObject = decltype(MoCreate(0, std::declval<const RandomBag&>()));
+    unsigned long localSeh = 0;
+    const int rc = SafeMoInit(reinterpret_cast<MoObject>(object), objectId,
+                              &g_sessionRandoms[static_cast<size_t>(objectId)],
+                              g_sessionDt, &localSeh);
+    if (exceptionCode) *exceptionCode = localSeh;
+    return rc;
+}
+
+extern "C" __declspec(dllexport) int MoPool_Step(
+    void* object, int objectId, int step, double* lat, double* lon,
+    unsigned long* exceptionCode) {
+    if (exceptionCode) *exceptionCode = 0;
+    if (!object || !lat || !lon
+        || objectId < 0 || objectId >= static_cast<int>(g_sessionRandoms.size()))
+        return -1;
+    using MoObject = decltype(MoCreate(0, std::declval<const RandomBag&>()));
+    unsigned long localSeh = 0;
+    const int rc = SafeMoStep(reinterpret_cast<MoObject>(object), objectId, step, g_sessionDt,
+                              &g_sessionRandoms[static_cast<size_t>(objectId)],
+                              lat, lon, &localSeh);
+    if (exceptionCode) *exceptionCode = localSeh;
+    return rc;
+}
+
+extern "C" __declspec(dllexport) void MoPool_Destroy(void* object, int objectId,
+                                                     unsigned long* exceptionCode) {
+    if (exceptionCode) *exceptionCode = 0;
+    if (!object) return;
+    using MoObject = decltype(MoCreate(0, std::declval<const RandomBag&>()));
+    unsigned long localSeh = 0;
+    SafeMoDestroy(reinterpret_cast<MoObject>(object), objectId, &localSeh);
+    if (exceptionCode) *exceptionCode = localSeh;
+}
 )CPP";
     return source.str();
 }
@@ -752,6 +862,7 @@ CompileResult MultiObjectHarness::CompileUserPool(const UserHarnessConfig& confi
     result.sourcePath = qToUtf8(sourcePath);
     if (!InvokeCl(compileConfig, result.sourcePath, qToUtf8(dllPath), result.log))
         return result;
+    CopyDependencyDllsBesideHarness(m_searchDirs, workDir, dllPath, result.log);
     std::string error;
     if (!LoadCompiledDll(qToUtf8(dllPath), error)) {
         result.log += error;
@@ -1074,6 +1185,7 @@ CompileResult MultiObjectHarness::Compile(const MultiObjectHarnessConfig& config
     QFile::remove(dllPath);
     result.sourcePath = qToUtf8(sourcePath);
     if (!InvokeCl(actual, result.sourcePath, qToUtf8(dllPath), result.log)) return result;
+    CopyDependencyDllsBesideHarness(m_searchDirs, workDir, dllPath, result.log);
     std::string error;
     if (!LoadCompiledDll(qToUtf8(dllPath), error)) {
         result.log += error;
@@ -1132,13 +1244,14 @@ bool MultiObjectHarness::LoadModelDll(
 
 bool MultiObjectHarness::LoadCompiledDll(const std::string& path, std::string& error) {
     Unload();
-    if (!m_searchDirs.empty()) SetDllDirectoryA(m_searchDirs.front().c_str());
+    SetDllDirectoryPreferringModels(m_searchDirs);
     const std::wstring widePath = toWide(path);
     m_hModule = LoadLibraryExW(widePath.c_str(), NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!m_hModule) m_hModule = LoadLibraryW(widePath.c_str());
     if (!m_hModule) {
         error = "ERROR: 无法加载多对象 Harness DLL，GetLastError="
-              + std::to_string(GetLastError()) + "\n";
+              + std::to_string(GetLastError())
+              + "（请确认 models/ 下的第三方 .dll 可被找到，或已复制到 Harness 输出目录）\n";
         return false;
     }
     m_pfnRun = reinterpret_cast<FnRunMultiObject>(
@@ -1154,6 +1267,16 @@ bool MultiObjectHarness::LoadCompiledDll(const std::string& path, std::string& e
         Unload();
         return false;
     }
+    m_pfnMoPoolPrepare = reinterpret_cast<FnMoPoolPrepare>(
+        GetProcAddress(m_hModule, "MoPool_Prepare"));
+    m_pfnMoPoolCreate = reinterpret_cast<FnMoPoolCreate>(
+        GetProcAddress(m_hModule, "MoPool_Create"));
+    m_pfnMoPoolInit = reinterpret_cast<FnMoPoolInit>(
+        GetProcAddress(m_hModule, "MoPool_Init"));
+    m_pfnMoPoolStep = reinterpret_cast<FnMoPoolStep>(
+        GetProcAddress(m_hModule, "MoPool_Step"));
+    m_pfnMoPoolDestroy = reinterpret_cast<FnMoPoolDestroy>(
+        GetProcAddress(m_hModule, "MoPool_Destroy"));
     m_dllPath = path;
     m_directModelMode = false;
     return true;
@@ -1166,6 +1289,11 @@ void MultiObjectHarness::Unload() {
     m_pfnGetResult = nullptr;
     m_pfnGetTrackPoint = nullptr;
     m_pfnGetMaxFrameMs = nullptr;
+    m_pfnMoPoolPrepare = nullptr;
+    m_pfnMoPoolCreate = nullptr;
+    m_pfnMoPoolInit = nullptr;
+    m_pfnMoPoolStep = nullptr;
+    m_pfnMoPoolDestroy = nullptr;
     m_pfnCreate = nullptr;
     m_pfnInitEx = nullptr;
     m_pfnStepEx = nullptr;
@@ -1463,4 +1591,159 @@ bool MultiObjectHarness::Run(const MultiObjectTestConfig& config,
         report.objectResults.push_back(result);
     }
     return true;
+}
+bool MultiObjectHarness::SupportsObjectSession() const {
+    if (!IsLoaded()) return false;
+    if (m_directModelMode)
+        return m_pfnCreate && m_pfnInitEx && m_pfnStepEx && m_pfnDestroyEx;
+    return m_pfnMoPoolPrepare && m_pfnMoPoolCreate && m_pfnMoPoolInit
+        && m_pfnMoPoolStep && m_pfnMoPoolDestroy;
+}
+
+WeaponModelParams MultiObjectHarness::BuildDirectParams(int objectId) const {
+    WeaponModelParams parameters{};
+    parameters.init_lat = 30.0;
+    parameters.init_lon = 110.0;
+    parameters.init_alt = 3000.0;
+    parameters.init_speed = 500.0;
+    parameters.init_heading = 35.0 + objectId * 7.0;
+    parameters.init_pitch = 12.0;
+    parameters.init_roll = 0.0;
+    parameters.step_dt = m_sessionDt;
+    int doubleVarsPerObject = 0;
+    int intVarsPerObject = 0;
+    for (const auto& variable : m_enabledVars) {
+        if (variable.type == RandomVarType::Int) ++intVarsPerObject;
+        else ++doubleVarsPerObject;
+    }
+    size_t doubleIndex = 0, intIndex = 0;
+    for (const auto& variable : m_enabledVars) {
+        double value = 0.0;
+        if (variable.type == RandomVarType::Int) {
+            const size_t idx = static_cast<size_t>(objectId) * intVarsPerObject + intIndex;
+            if (idx < m_sessionValues.ints.size()) value = m_sessionValues.ints[idx];
+            ++intIndex;
+        } else {
+            const size_t idx = static_cast<size_t>(objectId) * doubleVarsPerObject + doubleIndex;
+            if (idx < m_sessionValues.doubles.size()) value = m_sessionValues.doubles[idx];
+            ++doubleIndex;
+        }
+        if (variable.name == "lat") parameters.init_lat = value;
+        else if (variable.name == "lon") parameters.init_lon = value;
+        else if (variable.name == "alt") parameters.init_alt = value;
+        else if (variable.name == "speed") parameters.init_speed = value;
+        else if (variable.name == "heading") parameters.init_heading = value;
+        else if (variable.name == "pitch") parameters.init_pitch = value;
+        else if (variable.name == "roll") parameters.init_roll = value;
+    }
+    return parameters;
+}
+
+bool MultiObjectHarness::PrepareObjectSession(const RandomValueBlob& values,
+                                              int objectCount, double dt,
+                                              std::string& error) {
+    if (!SupportsObjectSession()) {
+        error = m_directModelMode
+            ? "多对象 Harness 未加载"
+            : "当前多对象 Harness 不支持对象级调度，请重新编译多对象 Harness（需 MoPool_* 导出）";
+        return false;
+    }
+    if (objectCount < 1 || dt <= 0.0) {
+        error = "对象数与 dt 必须大于 0";
+        return false;
+    }
+    m_sessionValues = values;
+    m_sessionObjectCount = objectCount;
+    m_sessionDt = dt;
+    if (m_directModelMode) {
+        error.clear();
+        return true;
+    }
+    const int rc = m_pfnMoPoolPrepare(
+        values.doubles.empty() ? nullptr : values.doubles.data(),
+        static_cast<int>(values.doubles.size()),
+        values.ints.empty() ? nullptr : values.ints.data(),
+        static_cast<int>(values.ints.size()),
+        objectCount, dt);
+    if (rc != 0) {
+        error = "MoPool_Prepare 失败，返回码=" + std::to_string(rc);
+        return false;
+    }
+    error.clear();
+    return true;
+}
+
+void* MultiObjectHarness::CreateLiveObject(int objectId, unsigned long* exceptionCode) const {
+    if (exceptionCode) *exceptionCode = 0;
+    if (objectId < 0 || objectId >= m_sessionObjectCount) return nullptr;
+    if (m_directModelMode) {
+        ModelHandle handle = nullptr;
+        DWORD seh = 0;
+        if (!SafeCallCreate(m_pfnCreate, &handle, &seh) || !handle) {
+            if (exceptionCode) *exceptionCode = seh;
+            return nullptr;
+        }
+        return handle;
+    }
+    return m_pfnMoPoolCreate(objectId);
+}
+
+int MultiObjectHarness::InitLiveObject(void* object, int objectId,
+                                       unsigned long* exceptionCode) const {
+    if (exceptionCode) *exceptionCode = 0;
+    if (!object) return -1;
+    if (m_directModelMode) {
+        WeaponModelParams parameters = BuildDirectParams(objectId);
+        int returnCode = 0;
+        DWORD seh = 0;
+        if (!SafeCallInitEx(m_pfnInitEx, object, &parameters, &returnCode, &seh)) {
+            if (exceptionCode) *exceptionCode = seh;
+            return -32000;
+        }
+        if (exceptionCode) *exceptionCode = seh;
+        return returnCode;
+    }
+    unsigned long seh = 0;
+    const int rc = m_pfnMoPoolInit(object, objectId, &seh);
+    if (exceptionCode) *exceptionCode = seh;
+    return rc;
+}
+
+int MultiObjectHarness::StepLiveObject(void* object, int objectId, int stepIndex,
+                                       double* outLat, double* outLon,
+                                       unsigned long* exceptionCode) const {
+    if (exceptionCode) *exceptionCode = 0;
+    if (!object || !outLat || !outLon) return -1;
+    if (m_directModelMode) {
+        WeaponModelOutput output{};
+        int returnCode = 0;
+        DWORD seh = 0;
+        if (!SafeCallStepEx(m_pfnStepEx, object, &output, &returnCode, &seh)) {
+            if (exceptionCode) *exceptionCode = seh;
+            return -32000;
+        }
+        *outLat = output.lat;
+        *outLon = output.lon;
+        if (exceptionCode) *exceptionCode = seh;
+        return returnCode;
+    }
+    unsigned long seh = 0;
+    const int rc = m_pfnMoPoolStep(object, objectId, stepIndex, outLat, outLon, &seh);
+    if (exceptionCode) *exceptionCode = seh;
+    return rc;
+}
+
+void MultiObjectHarness::DestroyLiveObject(void* object, int objectId,
+                                           unsigned long* exceptionCode) const {
+    if (exceptionCode) *exceptionCode = 0;
+    if (!object) return;
+    if (m_directModelMode) {
+        DWORD seh = 0;
+        SafeCallDestroyEx(m_pfnDestroyEx, object, &seh);
+        if (exceptionCode) *exceptionCode = seh;
+        return;
+    }
+    unsigned long seh = 0;
+    m_pfnMoPoolDestroy(object, objectId, &seh);
+    if (exceptionCode) *exceptionCode = seh;
 }

@@ -25,6 +25,8 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QTabBar>
+#include <QHash>
+#include <QPair>
 
 #include "ChartViewerWidget.h"
 #include "TrajectoryViewWidget.h"
@@ -85,13 +87,33 @@ QString ExeTestModelRoot() {
         QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("TestModel")));
 }
 
+QString PackageLayoutHintText() {
+    return QStringLiteral(
+        "第三方模型包必须按如下目录归放（子目录会递归扫描）：\n"
+        "  模型包根目录/\n"
+        "    include/   — 头文件（.h / .hpp）\n"
+        "    lib/       — 导入库 / 静态库（.lib）\n"
+        "    models/    — 模型动态库（.dll）\n"
+        "授权文件请与 models/ 下的第三方 .dll 同级放置；如不可用可复制一份到本 exe 同级目录。");
+}
+
 QString FindFirstModelDll(const QString& packageDir) {
     if (packageDir.isEmpty() || !QDir(packageDir).exists()) return QString();
-    QDirIterator iterator(packageDir, QStringList() << QStringLiteral("*.dll"),
-                          QDir::Files, QDirIterator::Subdirectories);
-    if (!iterator.hasNext()) return QString();
-    return QDir::toNativeSeparators(
-        QFileInfo(iterator.next()).absoluteFilePath());
+    const ModelPackageFiles files =
+        PackageScanner::ScanPackageDirectory(qToUtf8(packageDir));
+    if (files.allDllFiles.empty()) return QString();
+    return qUtf8(files.allDllFiles.front());
+}
+
+QStringList HeaderFilesFromPackage(const QString& packageDir) {
+    QStringList paths;
+    if (packageDir.isEmpty()) return paths;
+    const ModelPackageFiles files =
+        PackageScanner::ScanPackageDirectory(qToUtf8(packageDir));
+    for (const auto& path : files.allHeaderFiles) {
+        paths.push_back(qUtf8(path));
+    }
+    return paths;
 }
 
 } // namespace
@@ -194,7 +216,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_listTestNavigation->addItem(QStringLiteral("运行轨迹查看"));
     m_listTestNavigation->addItem(QStringLiteral("多型号并行"));
     m_listTestNavigation->addItem(QStringLiteral("多线程稳定性"));
-    m_listTestNavigation->addItem(QStringLiteral("单线程多对象测试"));
+    m_listTestNavigation->addItem(QStringLiteral("单线程多对象"));
     m_listTestNavigation->addItem(QStringLiteral("查看报告"));
     m_listTestNavigation->setProperty("testNavigation", true);
     navigationLayout->addWidget(m_listTestNavigation, 1);
@@ -216,6 +238,8 @@ MainWindow::MainWindow(QWidget* parent)
     // ========== Right: one scrollable workflow page ==========
     QGroupBox* rightPanel = new QGroupBox("型号与 UserMain 配置", this);
     m_modelSetupPanel = rightPanel;
+    // Taller than test workspace so editor + lower pane have room to grow.
+    m_modelSetupPanel->setMinimumHeight(1100);
     QVBoxLayout* rightLayout = new QVBoxLayout(rightPanel);
     rightLayout->setContentsMargins(12, 12, 12, 12);
 
@@ -223,7 +247,8 @@ MainWindow::MainWindow(QWidget* parent)
     formModel->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
     m_editModelName = new QLineEdit(this);
     m_editModelPackage = new QLineEdit(this);
-    m_editModelPackage->setPlaceholderText("选择该型号的模型包根目录...");
+    m_editModelPackage->setPlaceholderText(
+        QStringLiteral("选择模型包根目录（须含 include / lib / models）..."));
     m_btnBrowseModelPackage = new QPushButton("浏览...", this);
     FitButtonText(m_btnBrowseModelPackage);
     QHBoxLayout* pkgRow = new QHBoxLayout();
@@ -231,16 +256,15 @@ MainWindow::MainWindow(QWidget* parent)
     pkgRow->addWidget(m_btnBrowseModelPackage);
     formModel->addRow("型号名称:", m_editModelName);
     formModel->addRow("模型包路径:", pkgRow);
-    m_lblLicenseHint = new QLabel(
-        QStringLiteral("提示：授权文件或文件夹请放在第三方模型 dll 同级目录，如不可用可复制一份放在本 exe 同级目录下。"),
-        this);
+    m_lblLicenseHint = new QLabel(PackageLayoutHintText(), this);
     m_lblLicenseHint->setWordWrap(true);
     m_lblLicenseHint->setStyleSheet("color: #14b8a6; font-size: 11px;");
     rightLayout->addLayout(formModel);
     rightLayout->addWidget(m_lblLicenseHint);
 
     m_lblPathStageStatus = new QLabel(
-        QStringLiteral("步骤 2：请选择有效的模型包路径，随后将显示头文件和 UserMain 配置。"), this);
+        QStringLiteral("步骤 2：请选择符合 include/lib/models 目录结构的模型包根目录，"
+                       "随后将从 include/ 读取头文件。"), this);
     m_lblPathStageStatus->setWordWrap(true);
     m_lblPathStageStatus->setProperty("pathStageStatus", true);
     rightLayout->addWidget(m_lblPathStageStatus);
@@ -251,7 +275,8 @@ MainWindow::MainWindow(QWidget* parent)
     detailLayout->setContentsMargins(10, 10, 10, 10);
 
     QHBoxLayout* hdrPickRow = new QHBoxLayout();
-    QLabel* headerTitle = new QLabel("步骤 3.1：选择包含头文件（可多选）", this);
+    QLabel* headerTitle = new QLabel(
+        QStringLiteral("步骤 3.1：选择 include/ 下的头文件（可多选，含子目录）"), this);
     headerTitle->setProperty("sectionTitle", true);
     hdrPickRow->addWidget(headerTitle);
     m_btnRefreshModelHeaders = new QPushButton("刷新列表", this);
@@ -281,7 +306,8 @@ MainWindow::MainWindow(QWidget* parent)
     m_editUserMain->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     QWidget* userMainBelow = new QWidget(userMainSplitter);
-    userMainBelow->setMinimumHeight(80);
+    // Match multi-object page lower pane minimum so the editor can drag similarly.
+    userMainBelow->setMinimumHeight(160);
     userMainBelow->setMaximumHeight(QWIDGETSIZE_MAX);
     QVBoxLayout* belowLayout = new QVBoxLayout(userMainBelow);
     belowLayout->setContentsMargins(0, 4, 0, 0);
@@ -301,11 +327,22 @@ MainWindow::MainWindow(QWidget* parent)
     belowLayout->addLayout(rndTitle);
 
     m_tblRandomVars = new QTableWidget(0, 5, userMainBelow);
+    m_tblRandomVars->setObjectName(QStringLiteral("randomVarsTable"));
     m_tblRandomVars->setHorizontalHeaderLabels({ "启用", "变量名", "类型", "最小值", "最大值" });
     m_tblRandomVars->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    m_tblRandomVars->setMinimumHeight(80);
-    m_tblRandomVars->setMaximumHeight(140);
-    belowLayout->addWidget(m_tblRandomVars);
+    m_tblRandomVars->horizontalHeader()->setMinimumSectionSize(48);
+    m_tblRandomVars->horizontalHeader()->setFixedHeight(28);
+    m_tblRandomVars->verticalHeader()->setVisible(false);
+    m_tblRandomVars->verticalHeader()->setDefaultSectionSize(28);
+    m_tblRandomVars->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
+    m_tblRandomVars->setMinimumHeight(160);
+    m_tblRandomVars->setMaximumHeight(280);
+    m_tblRandomVars->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_tblRandomVars->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_tblRandomVars->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_tblRandomVars->setWordWrap(false);
+    m_tblRandomVars->setShowGrid(true);
+    belowLayout->addWidget(m_tblRandomVars, /*stretch*/ 1);
 
     QHBoxLayout* layoutCompile = new QHBoxLayout();
     m_btnCompileCurrent = new QPushButton("步骤 4：编译当前型号", userMainBelow);
@@ -315,19 +352,25 @@ MainWindow::MainWindow(QWidget* parent)
     layoutCompile->addWidget(m_btnCompileCurrent);
     layoutCompile->addWidget(m_btnCompileAll);
     layoutCompile->addStretch(1);
-    belowLayout->addLayout(layoutCompile);
+    belowLayout->addLayout(layoutCompile, 0);
 
     m_lblHarnessStatus = new QLabel("Harness: 未编译", userMainBelow);
-    m_lblHarnessStatus->setWordWrap(true);
-    belowLayout->addWidget(m_lblHarnessStatus);
+    m_lblHarnessStatus->setObjectName(QStringLiteral("harnessStatusLabel"));
+    m_lblHarnessStatus->setWordWrap(false);
+    m_lblHarnessStatus->setFixedHeight(28);
+    m_lblHarnessStatus->setMinimumWidth(0);
+    m_lblHarnessStatus->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_lblHarnessStatus->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_lblHarnessStatus->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_lblHarnessStatus->setToolTip(QStringLiteral("Harness: 未编译"));
+    belowLayout->addWidget(m_lblHarnessStatus, 0);
 
     userMainSplitter->addWidget(m_editUserMain);
     userMainSplitter->addWidget(userMainBelow);
-    userMainSplitter->setStretchFactor(0, 10);
-    userMainSplitter->setStretchFactor(1, 1);
-    userMainSplitter->setSizes({ 900, 100 });
-    userMainSplitter->setMaximumHeight(QWIDGETSIZE_MAX);
-    // Expand scroll-area content when the user pulls the editor taller.
+    // Same stretch / initial sizes / drag sync as multi-object code editor splitter.
+    userMainSplitter->setStretchFactor(0, 2);
+    userMainSplitter->setStretchFactor(1, 3);
+    userMainSplitter->setSizes({ 260, 720 });
     auto syncUserMainSplitterHeight = [userMainSplitter]() {
         const QList<int> sizes = userMainSplitter->sizes();
         int total = userMainSplitter->handleWidth() * qMax(0, sizes.size() - 1);
@@ -347,7 +390,8 @@ MainWindow::MainWindow(QWidget* parent)
     QWidget* tabHeader = new QWidget(this);
     QVBoxLayout* layoutTabHeader = new QVBoxLayout(tabHeader);
     QLabel* headerHint = new QLabel(
-        QStringLiteral("检查头文件编码、extern \"C\"、导出声明和接口原型。"), tabHeader);
+        QStringLiteral("检查头文件编码、extern \"C\"、导出声明和接口原型。"
+                       "头文件从模型包 include/（含子目录）读取。"), tabHeader);
     headerHint->setProperty("pageHint", true);
     layoutTabHeader->addWidget(headerHint);
     QHBoxLayout* layoutHeaderPick = new QHBoxLayout();
@@ -385,7 +429,8 @@ MainWindow::MainWindow(QWidget* parent)
     QWidget* tabLib = new QWidget(this);
     QVBoxLayout* layoutTabLib = new QVBoxLayout(tabLib);
     QLabel* libHint = new QLabel(
-        QStringLiteral("检查 LIB 文件架构、库类型和包含的接口符号。"), tabLib);
+        QStringLiteral("检查 LIB 文件架构、库类型和包含的接口符号。"
+                       "LIB 从模型包 lib/（含子目录）读取。"), tabLib);
     libHint->setProperty("pageHint", true);
     layoutTabLib->addWidget(libHint);
     QHBoxLayout* layoutLibPick = new QHBoxLayout();
@@ -412,7 +457,8 @@ MainWindow::MainWindow(QWidget* parent)
     QWidget* tabPe = new QWidget(this);
     QVBoxLayout* layoutTabPe = new QVBoxLayout(tabPe);
     m_lblPePageHint = new QLabel(
-        QStringLiteral("检查 DLL 是 32/64 位、运行库类型，以及它依赖的其他 DLL 是否齐全。"), tabPe);
+        QStringLiteral("检查 DLL 是 32/64 位、运行库类型，以及它依赖的其他 DLL 是否齐全。"
+                       "模型 DLL 从模型包 models/（含子目录）读取。"), tabPe);
     m_lblPePageHint->setWordWrap(true);
     m_lblPePageHint->setProperty("pageHint", true);
     layoutTabPe->addWidget(m_lblPePageHint);
@@ -581,7 +627,12 @@ MainWindow::MainWindow(QWidget* parent)
     splitterPerf->setStretchFactor(1, 2);
 
     layoutTabPerf->addWidget(m_lblPerfSummary);
-    layoutTabPerf->addWidget(splitterPerf, 1);
+    // Chart occupies 6/9 of leftover height; spacer holds the shortened 3/9.
+    layoutTabPerf->addWidget(splitterPerf, 6);
+    m_perfChartBottomSpacer = new QWidget(tabPerf);
+    m_perfChartBottomSpacer->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
+    m_perfChartBottomSpacer->setMinimumHeight(0);
+    layoutTabPerf->addWidget(m_perfChartBottomSpacer, 3);
 
     // Tab 2: Multi-model
     QWidget* tabMultiModel = new QWidget(this);
@@ -659,7 +710,8 @@ MainWindow::MainWindow(QWidget* parent)
     QVBoxLayout* layoutTabMultiObject = new QVBoxLayout(tabMultiObject);
     QLabel* multiObjectHint = new QLabel(
         QStringLiteral("添加型号后即可使用（无需先编译 UserMain）。与型号配置共用头文件、模型包路径和随机变量；"
-                       "只需写 MoCreate / MoInit / MoStep / MoDestroy，对象数由本页「对象数」控制。"),
+                       "写 MoCreate / MoInit / MoStep / MoDestroy 后可做单型号基线/交错，"
+                       "也可勾选多个型号执行「跨型号对象交错」（单线程 Step 级，不同于多型号并行）。"),
         tabMultiObject);
     multiObjectHint->setWordWrap(true);
     multiObjectHint->setProperty("pageHint", true);
@@ -779,47 +831,84 @@ MainWindow::MainWindow(QWidget* parent)
     multiObjectRestLayout->addLayout(multiObjectOptions);
 
     QHBoxLayout* multiObjectActions = new QHBoxLayout();
-    m_btnCompileMultiObject = new QPushButton(QStringLiteral("编译多对象 Harness"), multiObjectRest);
+    m_btnCompileMultiObject = new QPushButton(QStringLiteral("编译当前型号"), multiObjectRest);
+    m_btnCompileMultiObjectAll = new QPushButton(QStringLiteral("编译全部型号"), multiObjectRest);
     m_btnRunMultiObject = new QPushButton(QStringLiteral("执行基线与交错测试"), multiObjectRest);
+    m_btnRunFleetMultiObject = new QPushButton(QStringLiteral("执行跨型号对象交错"), multiObjectRest);
     FitButtonText(m_btnCompileMultiObject);
+    FitButtonText(m_btnCompileMultiObjectAll);
     FitButtonText(m_btnRunMultiObject);
+    FitButtonText(m_btnRunFleetMultiObject);
     multiObjectActions->addWidget(m_btnCompileMultiObject);
+    multiObjectActions->addWidget(m_btnCompileMultiObjectAll);
     multiObjectActions->addWidget(m_btnRunMultiObject);
+    multiObjectActions->addWidget(m_btnRunFleetMultiObject);
     multiObjectActions->addStretch(1);
     multiObjectRestLayout->addLayout(multiObjectActions);
+
+    QLabel* fleetMoTitle = new QLabel(
+        QStringLiteral("跨型号参与列表（勾选 ≥2 个已编译多对象 Harness 的型号）"), multiObjectRest);
+    fleetMoTitle->setProperty("sectionTitle", true);
+    multiObjectRestLayout->addWidget(fleetMoTitle);
+    m_tblFleetMultiObjectModels = new QTableWidget(0, 3, multiObjectRest);
+    m_tblFleetMultiObjectModels->setHorizontalHeaderLabels({
+        QStringLiteral("参与"), QStringLiteral("型号"), QStringLiteral("对象数")
+    });
+    m_tblFleetMultiObjectModels->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    m_tblFleetMultiObjectModels->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    m_tblFleetMultiObjectModels->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    m_tblFleetMultiObjectModels->verticalHeader()->setVisible(false);
+    m_tblFleetMultiObjectModels->setMinimumHeight(72);
+    m_tblFleetMultiObjectModels->setMaximumHeight(140);
+    m_tblFleetMultiObjectModels->setSelectionMode(QAbstractItemView::NoSelection);
+    multiObjectRestLayout->addWidget(m_tblFleetMultiObjectModels);
+
     m_lblMultiObjectAdapterStatus = new QLabel(QStringLiteral("适配状态: 未配置"), multiObjectRest);
     m_lblMultiObjectResult = new QLabel(QStringLiteral("测试结果: 未执行"), multiObjectRest);
     m_lblMultiObjectResult->setWordWrap(true);
     multiObjectRestLayout->addWidget(m_lblMultiObjectAdapterStatus);
     multiObjectRestLayout->addWidget(m_lblMultiObjectResult);
 
-    QSplitter* multiObjectSplitter = new QSplitter(Qt::Horizontal, multiObjectRest);
+    QSplitter* multiObjectSplitter = new QSplitter(Qt::Vertical, multiObjectRest);
     m_pMultiObjectTrajectory = new TrajectoryViewWidget(multiObjectSplitter);
     m_pMultiObjectTrajectory->setEmptyHint(
-        QStringLiteral("暂无轨迹点\n请先编译多对象 Harness，再执行基线与交错测试\n"
+        QStringLiteral("暂无轨迹点\n请先编译多对象 Harness，再执行单型号或跨型号交错测试\n"
                        "轨迹通过 MoStep 中的 out_lat / out_lon 显示"));
-    m_pMultiObjectTrajectory->setMinimumHeight(120);
-    m_tblMultiObjectResults = new QTableWidget(0, 7, multiObjectSplitter);
+    m_pMultiObjectTrajectory->setMinimumHeight(180);
+    m_tblMultiObjectResults = new QTableWidget(0, 8, multiObjectSplitter);
     m_tblMultiObjectResults->setHorizontalHeaderLabels({
-        QStringLiteral("对象"), QStringLiteral("基线点"), QStringLiteral("交错点"),
-        QStringLiteral("最大偏差"), QStringLiteral("基线返回"), QStringLiteral("交错返回"),
-        QStringLiteral("结果")
+        QStringLiteral("型号"), QStringLiteral("对象"), QStringLiteral("基线点"),
+        QStringLiteral("交错点"), QStringLiteral("最大偏差"), QStringLiteral("基线返回"),
+        QStringLiteral("交错返回"), QStringLiteral("结果")
     });
     m_tblMultiObjectResults->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_tblMultiObjectResults->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_tblMultiObjectResults->setSelectionMode(QAbstractItemView::SingleSelection);
     m_tblMultiObjectResults->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_tblMultiObjectResults->setMinimumHeight(100);
     multiObjectSplitter->addWidget(m_pMultiObjectTrajectory);
     multiObjectSplitter->addWidget(m_tblMultiObjectResults);
+    multiObjectSplitter->setChildrenCollapsible(false);
     multiObjectSplitter->setStretchFactor(0, 3);
-    multiObjectSplitter->setStretchFactor(1, 4);
+    multiObjectSplitter->setStretchFactor(1, 2);
+    multiObjectSplitter->setSizes({ 420, 240 });
     multiObjectRestLayout->addWidget(multiObjectSplitter, 1);
 
     multiObjectPageSplitter->addWidget(m_editUserMultiObject);
     multiObjectPageSplitter->addWidget(multiObjectRest);
     multiObjectPageSplitter->setStretchFactor(0, 2);
     multiObjectPageSplitter->setStretchFactor(1, 3);
-    multiObjectPageSplitter->setSizes({ 260, 560 });
+    // Keep code editor initial height; grow the lower rest panel for trajectory/table.
+    multiObjectPageSplitter->setSizes({ 260, 720 });
+    auto syncMultiObjectPageSplitterHeight = [multiObjectPageSplitter]() {
+        const QList<int> sizes = multiObjectPageSplitter->sizes();
+        int total = multiObjectPageSplitter->handleWidth() * qMax(0, sizes.size() - 1);
+        for (int size : sizes) total += size;
+        multiObjectPageSplitter->setMinimumHeight(qMax(total, 200));
+    };
+    QObject::connect(multiObjectPageSplitter, &QSplitter::splitterMoved,
+                     multiObjectPageSplitter, syncMultiObjectPageSplitterHeight);
+    syncMultiObjectPageSplitterHeight();
     layoutTabMultiObject->addWidget(multiObjectPageSplitter, 1);
 
     // Report
@@ -835,7 +924,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_pCentralTabs->addTab(tabPerf, "性能 / 内存 / 轨迹");
     m_pCentralTabs->addTab(tabMultiModel, "多型号并行");
     m_pCentralTabs->addTab(tabMultiThr, "多线程稳定性");
-    m_pCentralTabs->addTab(tabMultiObject, "单线程多对象测试");
+    m_pCentralTabs->addTab(tabMultiObject, "单线程多对象");
     m_pCentralTabs->addTab(tabReport, "预检报告");
 
     QWidget* workflowPage = new QWidget(this);
@@ -865,7 +954,7 @@ MainWindow::MainWindow(QWidget* parent)
         QStringLiteral("测试工作区（请从左侧“测试导航”选择）"), m_testSection);
     m_testSectionTitle->setProperty("pageSectionTitle", true);
     testSectionLayout->addWidget(m_testSectionTitle);
-    m_pCentralTabs->setMinimumHeight(620);
+    m_pCentralTabs->setMinimumHeight(780);
     m_pCentralTabs->tabBar()->hide();
     testSectionLayout->addWidget(m_pCentralTabs);
 
@@ -935,7 +1024,11 @@ MainWindow::MainWindow(QWidget* parent)
             m_latestFleetReport = FleetSessionReport();
         }
         saveEditorsToCurrentModel();
-        if (isModelPathValid(entry)) {
+        if (!entered.isEmpty() && QDir(entered).exists()) {
+            if (!isModelPathValid(entry)) {
+                logMessage(QStringLiteral(
+                    "WARN: 模型包须包含 include、lib、models 三个子目录（可递归存放文件）"));
+            }
             refreshCurrentModelHeaders();
         }
         updateWorkflowUi();
@@ -958,7 +1051,9 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_comboMultiObjectModel, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onMultiObjectModelChanged);
     connect(m_btnCompileMultiObject, &QPushButton::clicked, this, &MainWindow::compileMultiObjectAdapter);
+    connect(m_btnCompileMultiObjectAll, &QPushButton::clicked, this, &MainWindow::compileAllMultiObjectAdapters);
     connect(m_btnRunMultiObject, &QPushButton::clicked, this, &MainWindow::runMultiObjectTest);
+    connect(m_btnRunFleetMultiObject, &QPushButton::clicked, this, &MainWindow::runFleetMultiObjectTest);
     connect(m_tblMultiObjectResults, &QTableWidget::itemSelectionChanged,
             this, &MainWindow::onMultiObjectResultSelectionChanged);
     connect(m_btnCheckDllFile, &QPushButton::clicked, this, &MainWindow::runDllFileCheckOnly);
@@ -1052,6 +1147,16 @@ void MainWindow::setBusyOverlayText(const QString& text) {
     if (m_busyOverlay) m_busyOverlay->setBusyText(text);
 }
 
+void MainWindow::showOverlayResult(const QString& text, bool success) {
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this, text, success]() {
+            showOverlayResult(text, success);
+        }, Qt::QueuedConnection);
+        return;
+    }
+    if (m_busyOverlay) m_busyOverlay->showResultToast(text, success);
+}
+
 void MainWindow::runBusyBlocking(const std::function<void()>& work) {
     if (m_busyOverlay) m_busyOverlay->runBlocking(work);
     else if (work) work();
@@ -1088,21 +1193,32 @@ std::vector<RandomVarDef> MainWindow::DefaultRandomVars() {
 
 void MainWindow::FillRandomVarTable(QTableWidget* table, const std::vector<RandomVarDef>& vars) {
     if (!table) return;
+    const QSignalBlocker blocker(table);
+    table->clearContents();
     table->setRowCount(0);
+    table->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
+    table->verticalHeader()->setDefaultSectionSize(28);
     for (const auto& v : vars) {
         int row = table->rowCount();
         table->insertRow(row);
+        table->setRowHeight(row, 28);
         QTableWidgetItem* en = new QTableWidgetItem();
+        en->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
         en->setCheckState(v.enabled ? Qt::Checked : Qt::Unchecked);
         table->setItem(row, 0, en);
         table->setItem(row, 1, new QTableWidgetItem(qUtf8(v.name)));
         QComboBox* ty = new QComboBox(table);
+        ty->setFixedHeight(24);
         ty->addItem("double", 0);
         ty->addItem("int", 1);
         ty->setCurrentIndex(v.type == RandomVarType::Int ? 1 : 0);
         table->setCellWidget(row, 2, ty);
         table->setItem(row, 3, new QTableWidgetItem(QString::number(v.minValue)));
         table->setItem(row, 4, new QTableWidgetItem(QString::number(v.maxValue)));
+    }
+    // Keep row heights stable after combo widgets are attached (avoids first-row stretch).
+    for (int row = 0; row < table->rowCount(); ++row) {
+        table->setRowHeight(row, 28);
     }
 }
 
@@ -1158,7 +1274,10 @@ bool MainWindow::requireSelectedModelCompiled(QComboBox* combo, int /*switchToTa
 
 bool MainWindow::isModelPathValid(const FleetModelEntry& entry) const {
     const QString path = entry.packageDir.trimmed();
-    return !path.isEmpty() && QDir(path).exists();
+    if (path.isEmpty() || !QDir(path).exists()) return false;
+    return QDir(path).exists(QString::fromUtf8(ModelPackageLayout::IncludeDirName()))
+        && QDir(path).exists(QString::fromUtf8(ModelPackageLayout::LibDirName()))
+        && QDir(path).exists(QString::fromUtf8(ModelPackageLayout::ModelsDirName()));
 }
 
 bool MainWindow::isModelConfigured(const FleetModelEntry& entry) const {
@@ -1192,6 +1311,28 @@ void MainWindow::setEditorsEnabled(bool on) {
         m_btnRemoveRandomVar->setEnabled(false);
         m_btnCompileCurrent->setEnabled(false);
     }
+}
+
+void MainWindow::setHarnessStatusText(const QString& text, const QString& tone) {
+    if (!m_lblHarnessStatus) return;
+    const QString full = text.isEmpty() ? QStringLiteral("Harness: 未编译") : text;
+    m_lblHarnessStatus->setToolTip(full);
+    const int avail = qMax(40, m_lblHarnessStatus->width() - 8);
+    const QString shown = m_lblHarnessStatus->fontMetrics().elidedText(
+        full, Qt::ElideMiddle, avail);
+    m_lblHarnessStatus->setText(shown);
+
+    QString color = QStringLiteral("#94a3b8");
+    if (tone == QStringLiteral("ok") || tone == QStringLiteral("success"))
+        color = QStringLiteral("#34d399");
+    else if (tone == QStringLiteral("fail") || tone == QStringLiteral("error"))
+        color = QStringLiteral("#f87171");
+    else if (tone == QStringLiteral("busy"))
+        color = QStringLiteral("#fbbf24");
+    m_lblHarnessStatus->setStyleSheet(
+        QStringLiteral("QLabel#harnessStatusLabel {"
+                       "  max-height: 28px; min-height: 28px; padding: 0 4px; color: %1; }")
+            .arg(color));
 }
 
 void MainWindow::updateWorkflowUi() {
@@ -1281,13 +1422,24 @@ void MainWindow::updateWorkflowUi() {
     m_lblMultiObjectPageHint->setVisible(!multiObjectReady);
     m_lblMultiObjectPageHint->setText(m_models.empty()
         ? QStringLiteral("请先在左侧点击「添加型号」。")
-        : QStringLiteral("请在「型号与 UserMain」中选择模型包路径并勾选至少一个头文件，以便编译多对象 Harness。"));
+        : QStringLiteral("请在「型号与 UserMain」中选择符合 include/lib/models 结构的模型包，"
+                         "并从 include/ 勾选至少一个头文件，以便编译多对象 Harness。"));
     m_editUserMultiObject->setEnabled(multiObjectReady);
     m_btnCompileMultiObject->setEnabled(
-        multiObjectReady && !mappedEntry->userMultiObjectBody.trimmed().isEmpty());
+        multiObjectReady && isMultiObjectConfigured(*mappedEntry));
+    bool allMultiObjectConfigured = !m_models.empty();
+    for (const FleetModelEntry& entry : m_models) {
+        if (!isMultiObjectConfigured(entry)) {
+            allMultiObjectConfigured = false;
+            break;
+        }
+    }
+    m_btnCompileMultiObjectAll->setEnabled(allMultiObjectConfigured);
     m_btnRunMultiObject->setEnabled(
         mappedEntry && mappedEntry->multiObjectHarness
         && mappedEntry->multiObjectHarness->IsLoaded());
+    m_btnRunFleetMultiObject->setEnabled(m_models.size() >= 2);
+    m_tblFleetMultiObjectModels->setEnabled(m_models.size() >= 2);
     m_spnMultiObjectCount->setEnabled(multiObjectReady);
     m_spnMultiObjectSteps->setEnabled(multiObjectReady);
     m_spnMultiObjectDt->setEnabled(multiObjectReady);
@@ -1297,11 +1449,13 @@ void MainWindow::updateWorkflowUi() {
     if (hasSelection) {
         if (pathValid) {
             m_lblPathStageStatus->setText(
-                QStringLiteral("模型包路径有效。请继续选择头文件、编写 UserMain 并完成编译。"));
+                QStringLiteral("模型包目录结构有效（include / lib / models）。"
+                               "请继续从 include/ 选择头文件、编写 UserMain 并完成编译。"));
             m_lblPathStageStatus->setProperty("pathValid", true);
         } else {
             m_lblPathStageStatus->setText(
-                QStringLiteral("步骤 2：请选择有效的模型包路径，随后将显示头文件和 UserMain 配置。"));
+                QStringLiteral("步骤 2：请选择模型包根目录，且必须包含 include、lib、models "
+                               "三个子目录（各自可再含子文件夹）。"));
             m_lblPathStageStatus->setProperty("pathValid", false);
         }
     } else {
@@ -1315,10 +1469,10 @@ void MainWindow::updateWorkflowUi() {
     QString summary = QStringLiteral("当前步骤：点击“添加型号”开始配置第三方模型。");
     if (!m_models.empty()) {
         activeStep = 1;
-        summary = QStringLiteral("当前步骤：为选中的型号选择有效模型包路径。");
+        summary = QStringLiteral("当前步骤：为选中的型号选择符合 include/lib/models 结构的模型包。");
         if (pathValid) {
             activeStep = 2;
-            summary = QStringLiteral("当前步骤：选择头文件、编写 UserMain，并配置随机变量。");
+            summary = QStringLiteral("当前步骤：从 include/ 选择头文件、编写 UserMain，并配置随机变量。");
         }
         if (configured) {
             activeStep = 3;
@@ -1389,7 +1543,7 @@ void MainWindow::loadEditorsFromModel(int index) {
         m_listHarnessHeaders->clear();
         m_editUserMain->clear();
         m_tblRandomVars->setRowCount(0);
-        m_lblHarnessStatus->setText("Harness: 未编译");
+        setHarnessStatusText(QStringLiteral("Harness: 未编译"));
         setEditorsEnabled(false);
         m_blockModelUi = false;
         updateWorkflowUi();
@@ -1405,18 +1559,25 @@ void MainWindow::loadEditorsFromModel(int index) {
     m_editUserMain->setPlainText(entry.userMainBody);
     FillRandomVarTable(m_tblRandomVars, entry.randomVars);
 
-    // Rebuild header checklist from package dir, restore checked paths
+    // Rebuild header checklist from package include/, restore checked paths
     m_listHarnessHeaders->clear();
     QString dir = entry.packageDir.trimmed();
     if (!dir.isEmpty() && QDir(dir).exists()) {
-        QDirIterator it(dir, QStringList() << "*.h" << "*.hpp", QDir::Files, QDirIterator::Subdirectories);
+        const QString includeDir = qUtf8(PackageScanner::IncludeDirectory(qToUtf8(dir)));
+        const QStringList headers = HeaderFilesFromPackage(dir);
         int n = 0;
-        while (it.hasNext() && n < 300) {
-            QString path = it.next();
-            QString abs = QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath());
-            auto* item = new QListWidgetItem(QDir(dir).relativeFilePath(path));
+        for (const QString& absRaw : headers) {
+            if (n >= 300) break;
+            const QString abs = QDir::toNativeSeparators(absRaw);
+            const QString relative = QDir(includeDir).exists()
+                ? QDir(includeDir).relativeFilePath(abs)
+                : QFileInfo(abs).fileName();
+            auto* item = new QListWidgetItem(
+                QStringLiteral("include/%1").arg(QDir::toNativeSeparators(relative)));
             item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable | Qt::ItemIsSelectable);
-            item->setCheckState(entry.headerPaths.contains(abs) ? Qt::Checked : Qt::Unchecked);
+            const bool checked = entry.headerPaths.contains(abs)
+                || (entry.headerPaths.isEmpty() && n < 32);
+            item->setCheckState(checked ? Qt::Checked : Qt::Unchecked);
             item->setData(Qt::UserRole, abs);
             item->setToolTip(abs);
             m_listHarnessHeaders->addItem(item);
@@ -1425,9 +1586,14 @@ void MainWindow::loadEditorsFromModel(int index) {
     }
 
     if (entry.harness && entry.harness->IsLoaded()) {
-        m_lblHarnessStatus->setText(QString("Harness: 已加载 — %1").arg(qUtf8(entry.harness->DllPath())));
+        setHarnessStatusText(
+            QString("Harness: 编译成功 — %1").arg(qUtf8(entry.harness->DllPath())),
+            QStringLiteral("ok"));
+    } else if (entry.status.contains(QStringLiteral("失败"))) {
+        setHarnessStatusText(QString("Harness: %1").arg(entry.status),
+                             QStringLiteral("fail"));
     } else {
-        m_lblHarnessStatus->setText(QString("Harness: %1").arg(entry.status));
+        setHarnessStatusText(QString("Harness: %1").arg(entry.status));
     }
 
     m_blockModelUi = false;
@@ -1523,6 +1689,7 @@ void MainWindow::refreshModelSelectors() {
             restore >= 0 ? restore
                          : (m_comboMultiObjectModel->count() > 0 ? 0 : -1));
     }
+    refreshFleetMultiObjectTable();
     refreshPeSelectors();
 }
 
@@ -1575,10 +1742,10 @@ void MainWindow::fillDllSelector(QComboBox* modelCombo, QComboBox* dllCombo) {
     if (modelIndex >= 0 && modelIndex < static_cast<int>(m_models.size())) {
         const QString packageDir = m_models[static_cast<size_t>(modelIndex)].packageDir;
         if (!packageDir.isEmpty() && QDir(packageDir).exists()) {
-            QDirIterator it(packageDir, QStringList() << QStringLiteral("*.dll"),
-                QDir::Files, QDirIterator::Subdirectories);
-            while (it.hasNext()) {
-                dllPaths.push_back(QDir::toNativeSeparators(QFileInfo(it.next()).absoluteFilePath()));
+            const ModelPackageFiles files =
+                PackageScanner::ScanPackageDirectory(qToUtf8(packageDir));
+            for (const auto& path : files.allDllFiles) {
+                dllPaths.push_back(qUtf8(path));
             }
         }
     }
@@ -1613,9 +1780,21 @@ void MainWindow::fillPackageFileSelector(
     if (modelIndex >= 0 && modelIndex < static_cast<int>(m_models.size())) {
         const QString packageDir = m_models[static_cast<size_t>(modelIndex)].packageDir;
         if (!packageDir.isEmpty() && QDir(packageDir).exists()) {
-            QDirIterator it(packageDir, nameFilters, QDir::Files, QDirIterator::Subdirectories);
-            while (it.hasNext()) {
-                paths.push_back(QDir::toNativeSeparators(QFileInfo(it.next()).absoluteFilePath()));
+            const ModelPackageFiles files =
+                PackageScanner::ScanPackageDirectory(qToUtf8(packageDir));
+            const bool wantHeaders = nameFilters.contains(QStringLiteral("*.h"), Qt::CaseInsensitive)
+                || nameFilters.contains(QStringLiteral("*.hpp"), Qt::CaseInsensitive);
+            const bool wantLibs = nameFilters.contains(QStringLiteral("*.lib"), Qt::CaseInsensitive);
+            if (wantHeaders) {
+                for (const auto& path : files.allHeaderFiles) paths.push_back(qUtf8(path));
+            } else if (wantLibs) {
+                for (const auto& path : files.allLibFiles) paths.push_back(qUtf8(path));
+            } else {
+                QDirIterator it(packageDir, nameFilters, QDir::Files, QDirIterator::Subdirectories);
+                while (it.hasNext()) {
+                    paths.push_back(QDir::toNativeSeparators(
+                        QFileInfo(it.next()).absoluteFilePath()));
+                }
             }
         }
     }
@@ -1772,6 +1951,8 @@ void MainWindow::onTestNavigationChanged(int row) {
         m_pChartViewer->setVisible(!trajectoryMode);
         m_trajectoryPanel->setVisible(trajectoryMode);
         m_lblPerfSummary->setVisible(!trajectoryMode);
+        if (m_perfChartBottomSpacer)
+            m_perfChartBottomSpacer->setVisible(!trajectoryMode);
         if (!trajectoryMode) {
             m_pChartViewer->SetCurrentChart(row == 4 ? 0 : 1);
             m_btnRunStress->setText(row == 4
@@ -1834,10 +2015,31 @@ void MainWindow::onModelSelectionChanged() {
 void MainWindow::browseCurrentModelPackage() {
     if (m_currentModelIndex < 0) return;
     QString start = m_editModelPackage->text().trimmed();
-    QString dir = QFileDialog::getExistingDirectory(this, "选择型号模型包根目录", start);
+    QString dir = QFileDialog::getExistingDirectory(
+        this,
+        QStringLiteral("选择型号模型包根目录（须含 include / lib / models）"),
+        start);
     if (dir.isEmpty()) return;
 
     dir = QDir::toNativeSeparators(dir);
+    const ModelPackageFiles scanned =
+        PackageScanner::ScanPackageDirectory(qToUtf8(dir));
+    if (!scanned.layoutValid()) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("模型包目录结构不符合要求"),
+            PackageLayoutHintText()
+                + QStringLiteral("\n\n当前目录：") + dir
+                + QStringLiteral("\n缺少：")
+                + (scanned.includeDirExists ? QString() : QStringLiteral(" include"))
+                + (scanned.libDirExists ? QString() : QStringLiteral(" lib"))
+                + (scanned.modelsDirExists ? QString() : QStringLiteral(" models"))
+                + QStringLiteral("\n\n仍将记录该路径，请按上述结构归放文件后点击「刷新列表」。"));
+        for (const auto& msg : scanned.scanLog) {
+            logMessage(qDecodeLog(msg));
+        }
+    }
+
     FleetModelEntry& entry = m_models[static_cast<size_t>(m_currentModelIndex)];
     if (entry.packageDir != dir) {
         entry.harness.reset();
@@ -1868,16 +2070,31 @@ void MainWindow::refreshCurrentModelHeaders() {
         return;
     }
 
+    const ModelPackageFiles scanned =
+        PackageScanner::ScanPackageDirectory(qToUtf8(dir));
+    for (const auto& msg : scanned.scanLog) {
+        logMessage(qDecodeLog(msg));
+    }
+    if (!scanned.layoutValid()) {
+        logMessage(QStringLiteral("WARN: 型号「%1」模型包未按 include/lib/models 归放")
+                       .arg(entry.name));
+    }
+
     QStringList prevChecked = entry.headerPaths;
     m_listHarnessHeaders->clear();
-    QDirIterator it(dir, QStringList() << "*.h" << "*.hpp", QDir::Files, QDirIterator::Subdirectories);
+    const QString includeDir = qUtf8(scanned.includeDir);
     int n = 0;
-    while (it.hasNext() && n < 300) {
-        QString path = it.next();
-        QString abs = QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath());
-        auto* item = new QListWidgetItem(QDir(dir).relativeFilePath(path));
+    for (const auto& pathUtf8 : scanned.allHeaderFiles) {
+        if (n >= 300) break;
+        const QString abs = QDir::toNativeSeparators(qUtf8(pathUtf8));
+        const QString relative = QDir(includeDir).exists()
+            ? QDir(includeDir).relativeFilePath(abs)
+            : QFileInfo(abs).fileName();
+        auto* item = new QListWidgetItem(
+            QStringLiteral("include/%1").arg(QDir::toNativeSeparators(relative)));
         item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable | Qt::ItemIsSelectable);
-        bool checked = prevChecked.contains(abs) || (prevChecked.isEmpty() && n == 0);
+        bool checked = prevChecked.contains(abs)
+            || (prevChecked.isEmpty() && n < 32);
         item->setCheckState(checked ? Qt::Checked : Qt::Unchecked);
         item->setData(Qt::UserRole, abs);
         item->setToolTip(abs);
@@ -1886,7 +2103,8 @@ void MainWindow::refreshCurrentModelHeaders() {
     }
     saveEditorsToCurrentModel();
     refreshCodeEditorCompletions();
-    logMessage(QString("INFO: 型号「%1」头文件列表已刷新，共 %2 个").arg(entry.name).arg(n));
+    logMessage(QString("INFO: 型号「%1」头文件列表已从 include/ 刷新，共 %2 个")
+                   .arg(entry.name).arg(n));
     updateWorkflowUi();
 }
 
@@ -1902,24 +2120,28 @@ UserHarnessConfig MainWindow::buildHarnessConfig(const FleetModelEntry& entry, i
     QString outDir = QDir(ExeTestModelRoot()).filePath(folderName);
     QDir().mkpath(outDir);
     cfg.workDir = qToUtf8(QDir::toNativeSeparators(outDir));
-    cfg.outputBaseName = qToUtf8(folderName);
+    // Avoid colliding with models/<Name>.dll when copying deps beside the harness.
+    cfg.outputBaseName = qToUtf8(folderName + QStringLiteral("_UserHarness"));
 
     QString pkg = entry.packageDir.trimmed();
     if (!pkg.isEmpty()) {
-        cfg.includeDirs.push_back(qToUtf8(pkg));
-        cfg.libPaths.push_back(qToUtf8(pkg));
-        QStringList sub = { "include", "Include", "inc", "lib", "Lib", "x64/Release", "Release", "lib/Release" };
-        for (const QString& s : sub) {
-            QString p = QDir(pkg).filePath(s);
-            if (QDir(p).exists()) {
-                cfg.includeDirs.push_back(qToUtf8(QDir::toNativeSeparators(p)));
-                cfg.libPaths.push_back(qToUtf8(QDir::toNativeSeparators(p)));
-            }
-        }
-        QDirIterator lit(pkg, QStringList() << "*.lib", QDir::Files, QDirIterator::Subdirectories);
+        const QString includeDir = qUtf8(PackageScanner::IncludeDirectory(qToUtf8(pkg)));
+        const QString libDir = qUtf8(PackageScanner::LibDirectory(qToUtf8(pkg)));
+        const QString modelsDir = qUtf8(PackageScanner::ModelsDirectory(qToUtf8(pkg)));
+        if (QDir(includeDir).exists())
+            cfg.includeDirs.push_back(qToUtf8(includeDir));
+        // models/ first so SetDllDirectory / 依赖搜索优先找到第三方 .dll
+        if (QDir(modelsDir).exists())
+            cfg.libPaths.push_back(qToUtf8(modelsDir));
+        if (QDir(libDir).exists())
+            cfg.libPaths.push_back(qToUtf8(libDir));
+
+        const ModelPackageFiles files =
+            PackageScanner::ScanPackageDirectory(qToUtf8(pkg));
         int libCount = 0;
-        while (lit.hasNext() && libCount < 20) {
-            cfg.linkLibs.push_back(qToUtf8(QDir::toNativeSeparators(lit.next())));
+        for (const auto& libPath : files.allLibFiles) {
+            if (libCount >= 20) break;
+            cfg.linkLibs.push_back(libPath);
             ++libCount;
         }
     }
@@ -1932,14 +2154,23 @@ UserHarnessConfig MainWindow::buildHarnessConfig(const FleetModelEntry& entry, i
 UserHarnessConfig MainWindow::buildUserMultiObjectConfig(
     const FleetModelEntry& entry, int index) const {
     UserHarnessConfig cfg = buildHarnessConfig(entry, index);
+    // Ensure package include/*.h (especially WeaponObject.h) are available for Mo*.
+    if (isModelPathValid(entry)) {
+        const QStringList headers = HeaderFilesFromPackage(entry.packageDir);
+        for (const QString& path : headers) {
+            const std::string utf = qToUtf8(QDir::toNativeSeparators(path));
+            if (std::find(cfg.headerPaths.begin(), cfg.headerPaths.end(), utf)
+                == cfg.headerPaths.end()) {
+                cfg.headerPaths.push_back(utf);
+            }
+        }
+    }
     if (cfg.headerPaths.empty() && isModelPathValid(entry)) {
-        QDirIterator iterator(entry.packageDir,
-            QStringList() << QStringLiteral("*.h") << QStringLiteral("*.hpp"),
-            QDir::Files, QDirIterator::Subdirectories);
+        const QStringList headers = HeaderFilesFromPackage(entry.packageDir);
         int count = 0;
-        while (iterator.hasNext() && count < 30) {
-            cfg.headerPaths.push_back(qToUtf8(QDir::toNativeSeparators(
-                QFileInfo(iterator.next()).absoluteFilePath())));
+        for (const QString& path : headers) {
+            if (count >= 30) break;
+            cfg.headerPaths.push_back(qToUtf8(QDir::toNativeSeparators(path)));
             ++count;
         }
     }
@@ -2022,20 +2253,15 @@ MultiObjectHarnessConfig MainWindow::buildMultiObjectHarnessConfig(
         config.libPaths.push_back(qToUtf8(QDir::toNativeSeparators(libDirectory)));
     const QString package = entry.packageDir.trimmed();
     if (!package.isEmpty()) {
-        config.includeDirs.push_back(qToUtf8(QDir::toNativeSeparators(package)));
-        config.libPaths.push_back(qToUtf8(QDir::toNativeSeparators(package)));
-        const QStringList subdirectories = {
-            QStringLiteral("include"), QStringLiteral("Include"), QStringLiteral("inc"),
-            QStringLiteral("lib"), QStringLiteral("Lib"), QStringLiteral("x64/Release"),
-            QStringLiteral("Release"), QStringLiteral("lib/Release")
-        };
-        for (const QString& subdirectory : subdirectories) {
-            const QString path = QDir(package).filePath(subdirectory);
-            if (QDir(path).exists()) {
-                config.includeDirs.push_back(qToUtf8(QDir::toNativeSeparators(path)));
-                config.libPaths.push_back(qToUtf8(QDir::toNativeSeparators(path)));
-            }
-        }
+        const QString includeDir = qUtf8(PackageScanner::IncludeDirectory(qToUtf8(package)));
+        const QString libDir = qUtf8(PackageScanner::LibDirectory(qToUtf8(package)));
+        const QString modelsDir = qUtf8(PackageScanner::ModelsDirectory(qToUtf8(package)));
+        if (QDir(includeDir).exists())
+            config.includeDirs.push_back(qToUtf8(includeDir));
+        if (QDir(modelsDir).exists())
+            config.libPaths.push_back(qToUtf8(modelsDir));
+        if (QDir(libDir).exists())
+            config.libPaths.push_back(qToUtf8(libDir));
     }
     const QString headerDirectory = QFileInfo(entry.multiObjectHeaderPath).absolutePath();
     if (!headerDirectory.isEmpty())
@@ -2095,12 +2321,18 @@ void MainWindow::loadMultiObjectEditor(int modelIndex) {
     m_spnMultiObjectTolerance->setValue(entry.multiObjectTolerance);
     m_comboMultiObjectSchedule->setCurrentIndex(
         m_comboMultiObjectSchedule->findData(static_cast<int>(entry.multiObjectSchedule)));
-    m_lblMultiObjectAdapterStatus->setText(
-        entry.multiObjectHarness && entry.multiObjectHarness->IsLoaded()
-            ? QStringLiteral("状态: 多对象 Harness 已加载 — %1")
-                .arg(qUtf8(entry.multiObjectHarness->DllPath()))
-            : QStringLiteral("状态: 请编写 MoCreate/MoInit/MoStep/MoDestroy 并编译 Harness"));
-    updateMultiObjectResultView(entry.multiObjectReport);
+    if (entry.multiObjectHarness && entry.multiObjectHarness->IsLoaded()) {
+        m_lblMultiObjectAdapterStatus->setText(
+            QStringLiteral("状态: 多对象 Harness 已加载 — %1")
+                .arg(qUtf8(entry.multiObjectHarness->DllPath())));
+        m_lblMultiObjectAdapterStatus->setStyleSheet(
+            QStringLiteral("color: #34d399;"));
+    } else {
+        m_lblMultiObjectAdapterStatus->setText(
+            QStringLiteral("状态: 请编写 MoCreate/MoInit/MoStep/MoDestroy 并编译 Harness"));
+        m_lblMultiObjectAdapterStatus->setStyleSheet(
+            QStringLiteral("color: #94a3b8;"));
+    }
     updateWorkflowUi();
 }
 
@@ -2557,28 +2789,145 @@ void MainWindow::compileMultiObjectAdapter() {
         logMessage(QStringLiteral("ERROR: 请先在「型号与 UserMain」选择模型包路径并勾选头文件"));
         return;
     }
-    ScopedBusyOverlay wait(this,
-        QStringLiteral("正在编译多对象 Harness…"));
+    logMessage(QStringLiteral("INFO: 开始编译多对象 Harness「%1」…").arg(entry.name));
+    m_lblMultiObjectAdapterStatus->setText(
+        QStringLiteral("状态: 正在编译「%1」…").arg(entry.name));
+    m_lblMultiObjectAdapterStatus->setStyleSheet(QStringLiteral("color: #fbbf24;"));
+
     entry.multiObjectHarness = std::make_shared<MultiObjectHarness>();
     const UserHarnessConfig cfg = buildUserMultiObjectConfig(entry, modelIndex);
     CompileResult result;
-    wait.run([&]{ result = entry.multiObjectHarness->CompileUserPool(cfg); });
+    {
+        ScopedBusyOverlay wait(this,
+            QStringLiteral("正在编译多对象「%1」…").arg(entry.name));
+        MultiObjectHarness* harnessPtr = entry.multiObjectHarness.get();
+        wait.run([&]{ result = harnessPtr->CompileUserPool(cfg); });
+    }
     logMessage(qDecodeLog(result.log));
     if (result.success) {
+        const QString path = qUtf8(result.dllPath);
         entry.multiObjectMapping.abiValidated = true;
         entry.multiObjectMapping.validationMessage =
             "用户多对象代码编译并加载成功";
         m_lblMultiObjectAdapterStatus->setText(
-            QStringLiteral("状态: 多对象 Harness 已加载 — %1")
-                .arg(qUtf8(result.dllPath)));
-        logMessage(QStringLiteral("SUCCESS: 多对象 Harness 编译并加载成功"));
+            QStringLiteral("状态: 编译成功 — %1").arg(path));
+        m_lblMultiObjectAdapterStatus->setStyleSheet(
+            QStringLiteral("color: #34d399;"));
+        logMessage(QStringLiteral("SUCCESS: 型号「%1」多对象 Harness 编译成功 → %2")
+            .arg(entry.name).arg(path));
+        refreshFleetMultiObjectTable();
+        updateWorkflowUi();
+        showOverlayResult(
+            QStringLiteral("多对象编译成功\n\n%1\n%2").arg(entry.name, path), true);
     } else {
         entry.multiObjectMapping.abiValidated = false;
         entry.multiObjectHarness.reset();
         m_lblMultiObjectAdapterStatus->setText(
-            QStringLiteral("状态: 编译失败，请检查 MoCreate/MoInit/MoStep/MoDestroy"));
+            QStringLiteral("状态: 「%1」编译失败，请检查 MoCreate/MoInit/MoStep/MoDestroy")
+                .arg(entry.name));
+        m_lblMultiObjectAdapterStatus->setStyleSheet(
+            QStringLiteral("color: #f87171;"));
+        updateWorkflowUi();
+        showOverlayResult(
+            QStringLiteral("多对象编译失败\n\n型号「%1」\n请查看下方日志").arg(entry.name),
+            false);
     }
+}
+
+void MainWindow::compileAllMultiObjectAdapters() {
+    saveMultiObjectEditor();
+    if (m_models.empty()) {
+        QMessageBox::warning(this, QStringLiteral("警告"),
+                             QStringLiteral("请先添加型号"));
+        return;
+    }
+
+    logMessage(QStringLiteral("INFO: 开始编译全部型号多对象 Harness…"));
+
+    int ok = 0;
+    QString lastOkPath;
+    QString lastOkName;
+    {
+        ScopedBusyOverlay wait(this,
+            QStringLiteral("正在编译全部多对象 Harness\n(0 / %1)").arg(m_models.size()));
+
+        for (int i = 0; i < static_cast<int>(m_models.size()); ++i) {
+            FleetModelEntry& entry = m_models[static_cast<size_t>(i)];
+            wait.setText(QStringLiteral("正在编译多对象「%1」…\n(%2 / %3)")
+                .arg(entry.name).arg(i + 1).arg(m_models.size()));
+            m_lblMultiObjectAdapterStatus->setText(
+                QStringLiteral("状态: 正在编译「%1」… (%2/%3)")
+                    .arg(entry.name).arg(i + 1).arg(m_models.size()));
+            m_lblMultiObjectAdapterStatus->setStyleSheet(QStringLiteral("color: #fbbf24;"));
+            QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+
+            if (entry.userMultiObjectBody.trimmed().isEmpty()) {
+                logMessage(QStringLiteral("ERROR: 型号「%1」多对象代码为空").arg(entry.name));
+                entry.multiObjectHarness.reset();
+                entry.multiObjectMapping.abiValidated = false;
+                continue;
+            }
+            const UserHarnessConfig cfg = buildUserMultiObjectConfig(entry, i);
+            if (cfg.headerPaths.empty()) {
+                logMessage(QStringLiteral("ERROR: 型号「%1」未勾选头文件").arg(entry.name));
+                entry.multiObjectHarness.reset();
+                entry.multiObjectMapping.abiValidated = false;
+                continue;
+            }
+
+            entry.multiObjectHarness = std::make_shared<MultiObjectHarness>();
+            CompileResult result;
+            MultiObjectHarness* harnessPtr = entry.multiObjectHarness.get();
+            wait.run([&]{ result = harnessPtr->CompileUserPool(cfg); });
+            logMessage(QStringLiteral("---- 型号「%1」多对象编译日志 ----").arg(entry.name));
+            logMessage(qDecodeLog(result.log));
+            if (result.success) {
+                entry.multiObjectMapping.abiValidated = true;
+                entry.multiObjectMapping.validationMessage =
+                    "用户多对象代码编译并加载成功";
+                lastOkName = entry.name;
+                lastOkPath = qUtf8(result.dllPath);
+                ++ok;
+                logMessage(QStringLiteral("SUCCESS: 型号「%1」多对象 Harness 编译成功 → %2")
+                    .arg(entry.name).arg(lastOkPath));
+            } else {
+                entry.multiObjectMapping.abiValidated = false;
+                entry.multiObjectHarness.reset();
+            }
+        }
+    }
+
+    refreshFleetMultiObjectTable();
     updateWorkflowUi();
+    logMessage(QStringLiteral("INFO: 多对象 Harness 编译完成 %1/%2 成功")
+        .arg(ok).arg(m_models.size()));
+
+    if (ok == static_cast<int>(m_models.size()) && ok > 0) {
+        QString status = QStringLiteral("状态: 全部型号多对象编译成功（%1/%2）")
+            .arg(ok).arg(m_models.size());
+        if (!lastOkPath.isEmpty())
+            status += QStringLiteral(" — %1").arg(lastOkPath);
+        m_lblMultiObjectAdapterStatus->setText(status);
+        m_lblMultiObjectAdapterStatus->setStyleSheet(QStringLiteral("color: #34d399;"));
+        showOverlayResult(
+            QStringLiteral("全部多对象编译成功\n\n（%1/%2）\n%3\n%4")
+                .arg(ok).arg(m_models.size()).arg(lastOkName, lastOkPath),
+            true);
+    } else if (ok > 0) {
+        m_lblMultiObjectAdapterStatus->setText(
+            QStringLiteral("状态: 部分成功（%1/%2），失败见日志")
+                .arg(ok).arg(m_models.size()));
+        m_lblMultiObjectAdapterStatus->setStyleSheet(QStringLiteral("color: #f87171;"));
+        showOverlayResult(
+            QStringLiteral("部分多对象编译成功\n\n（%1/%2）\n失败型号请查看日志")
+                .arg(ok).arg(m_models.size()),
+            false);
+    } else {
+        m_lblMultiObjectAdapterStatus->setText(
+            QStringLiteral("状态: 全部型号多对象编译失败（详见日志）"));
+        m_lblMultiObjectAdapterStatus->setStyleSheet(QStringLiteral("color: #f87171;"));
+        showOverlayResult(QStringLiteral("全部多对象编译失败\n\n请查看下方日志"), false);
+    }
 }
 
 void MainWindow::runMultiObjectTest() {
@@ -2637,39 +2986,44 @@ void MainWindow::runMultiObjectTest() {
 }
 
 void MainWindow::updateMultiObjectResultView(const MultiObjectTestReport& report) {
+    m_showingFleetMultiObjectResults = false;
     m_tblMultiObjectResults->setRowCount(0);
     QVector<TrajectorySeries> series;
     const QVector<QColor> colors = {
         QColor("#2dd4bf"), QColor("#14b8a6"), QColor("#fbbf24"),
         QColor("#a7f3d0"), QColor("#34d399"), QColor("#5eead4")
     };
+    const QString modelName = selectedTestModel(m_comboMultiObjectModel)
+        ? selectedTestModel(m_comboMultiObjectModel)->name
+        : QStringLiteral("-");
     for (const auto& object : report.objectResults) {
         const int row = m_tblMultiObjectResults->rowCount();
         m_tblMultiObjectResults->insertRow(row);
-        m_tblMultiObjectResults->setItem(row, 0,
-            new QTableWidgetItem(QStringLiteral("Object #%1").arg(object.objectId)));
+        m_tblMultiObjectResults->setItem(row, 0, new QTableWidgetItem(modelName));
         m_tblMultiObjectResults->setItem(row, 1,
-            new QTableWidgetItem(QString::number(object.baselineTrajectory.size())));
+            new QTableWidgetItem(QStringLiteral("Object #%1").arg(object.objectId)));
         m_tblMultiObjectResults->setItem(row, 2,
-            new QTableWidgetItem(QString::number(object.interleavedTrajectory.size())));
+            new QTableWidgetItem(QString::number(object.baselineTrajectory.size())));
         m_tblMultiObjectResults->setItem(row, 3,
-            new QTableWidgetItem(QString::number(object.maxPositionDeviation, 'g', 10)));
+            new QTableWidgetItem(QString::number(object.interleavedTrajectory.size())));
         m_tblMultiObjectResults->setItem(row, 4,
-            new QTableWidgetItem(QString::number(object.baselineReturnCode)));
+            new QTableWidgetItem(QString::number(object.maxPositionDeviation, 'g', 10)));
         m_tblMultiObjectResults->setItem(row, 5,
-            new QTableWidgetItem(QString::number(object.interleavedReturnCode)));
+            new QTableWidgetItem(QString::number(object.baselineReturnCode)));
         m_tblMultiObjectResults->setItem(row, 6,
+            new QTableWidgetItem(QString::number(object.interleavedReturnCode)));
+        m_tblMultiObjectResults->setItem(row, 7,
             new QTableWidgetItem(qUtf8(object.detail)));
         const QColor color = colors[object.objectId % colors.size()];
         TrajectorySeries baseline;
-        baseline.name = QStringLiteral("对象%1 基线").arg(object.objectId);
+        baseline.name = QStringLiteral("%1#%2 基线").arg(modelName).arg(object.objectId);
         baseline.objectId = object.objectId;
         baseline.baseline = true;
         baseline.color = color;
         for (const auto& point : object.baselineTrajectory)
             baseline.points.push_back({ point.lat, point.lon });
         TrajectorySeries interleaved = baseline;
-        interleaved.name = QStringLiteral("对象%1 交错").arg(object.objectId);
+        interleaved.name = QStringLiteral("%1#%2 交错").arg(modelName).arg(object.objectId);
         interleaved.baseline = false;
         interleaved.points.clear();
         for (const auto& point : object.interleavedTrajectory)
@@ -2690,9 +3044,195 @@ void MainWindow::updateMultiObjectResultView(const MultiObjectTestReport& report
     }
 }
 
+void MainWindow::refreshFleetMultiObjectTable() {
+    if (!m_tblFleetMultiObjectModels) return;
+    QSignalBlocker blocker(m_tblFleetMultiObjectModels);
+    // Preserve checked model names and object counts
+    QHash<QString, QPair<bool, int>> previous;
+    for (int row = 0; row < m_tblFleetMultiObjectModels->rowCount(); ++row) {
+        QTableWidgetItem* nameItem = m_tblFleetMultiObjectModels->item(row, 1);
+        QTableWidgetItem* checkItem = m_tblFleetMultiObjectModels->item(row, 0);
+        QSpinBox* spin = qobject_cast<QSpinBox*>(
+            m_tblFleetMultiObjectModels->cellWidget(row, 2));
+        if (!nameItem || !checkItem) continue;
+        previous.insert(nameItem->text(),
+            qMakePair(checkItem->checkState() == Qt::Checked,
+                      spin ? spin->value() : 2));
+    }
+    m_tblFleetMultiObjectModels->setRowCount(0);
+    for (int i = 0; i < static_cast<int>(m_models.size()); ++i) {
+        const FleetModelEntry& entry = m_models[static_cast<size_t>(i)];
+        const int row = m_tblFleetMultiObjectModels->rowCount();
+        m_tblFleetMultiObjectModels->insertRow(row);
+        auto* check = new QTableWidgetItem();
+        check->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        const auto it = previous.find(entry.name);
+        const bool ready = entry.multiObjectHarness
+            && entry.multiObjectHarness->IsLoaded()
+            && entry.multiObjectHarness->SupportsObjectSession();
+        check->setCheckState(
+            (it != previous.end() && it->first && ready) ? Qt::Checked : Qt::Unchecked);
+        if (!ready)
+            check->setFlags(Qt::ItemIsSelectable);
+        check->setData(Qt::UserRole, i);
+        m_tblFleetMultiObjectModels->setItem(row, 0, check);
+        auto* name = new QTableWidgetItem(entry.name);
+        name->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        name->setToolTip(ready
+            ? QStringLiteral("多对象 Harness 已加载，可参与跨型号交错")
+            : QStringLiteral("请先为该型号编写 Mo* 并「编译多对象 Harness」"));
+        m_tblFleetMultiObjectModels->setItem(row, 1, name);
+        auto* spin = new QSpinBox(m_tblFleetMultiObjectModels);
+        spin->setRange(1, 32);
+        spin->setValue(it != previous.end() ? it->second
+            : qMax(1, entry.multiObjectCount));
+        spin->setEnabled(ready);
+        m_tblFleetMultiObjectModels->setCellWidget(row, 2, spin);
+        m_tblFleetMultiObjectModels->setRowHeight(row, 28);
+    }
+}
+
+void MainWindow::updateFleetMultiObjectResultView(const FleetMultiObjectTestReport& report) {
+    m_showingFleetMultiObjectResults = true;
+    m_latestFleetMultiObjectReport = report;
+    m_tblMultiObjectResults->setRowCount(0);
+    QVector<TrajectorySeries> series;
+    const QVector<QColor> colors = {
+        QColor("#2dd4bf"), QColor("#14b8a6"), QColor("#fbbf24"),
+        QColor("#a7f3d0"), QColor("#34d399"), QColor("#5eead4"),
+        QColor("#f59e0b"), QColor("#84cc16")
+    };
+    for (const auto& object : report.objectResults) {
+        const auto& detail = object.detail;
+        const int row = m_tblMultiObjectResults->rowCount();
+        m_tblMultiObjectResults->insertRow(row);
+        m_tblMultiObjectResults->setItem(row, 0,
+            new QTableWidgetItem(qUtf8(object.modelName)));
+        m_tblMultiObjectResults->setItem(row, 1,
+            new QTableWidgetItem(QStringLiteral("#%1 (local %2)")
+                .arg(object.globalObjectId).arg(object.localObjectId)));
+        m_tblMultiObjectResults->setItem(row, 2,
+            new QTableWidgetItem(QString::number(detail.baselineTrajectory.size())));
+        m_tblMultiObjectResults->setItem(row, 3,
+            new QTableWidgetItem(QString::number(detail.interleavedTrajectory.size())));
+        m_tblMultiObjectResults->setItem(row, 4,
+            new QTableWidgetItem(QString::number(detail.maxPositionDeviation, 'g', 10)));
+        m_tblMultiObjectResults->setItem(row, 5,
+            new QTableWidgetItem(QString::number(detail.baselineReturnCode)));
+        m_tblMultiObjectResults->setItem(row, 6,
+            new QTableWidgetItem(QString::number(detail.interleavedReturnCode)));
+        m_tblMultiObjectResults->setItem(row, 7,
+            new QTableWidgetItem(qUtf8(detail.detail)));
+        const QColor color = colors[object.globalObjectId % colors.size()];
+        TrajectorySeries baseline;
+        baseline.name = QStringLiteral("%1#%2 基线")
+            .arg(qUtf8(object.modelName)).arg(object.localObjectId);
+        baseline.objectId = object.globalObjectId;
+        baseline.baseline = true;
+        baseline.color = color;
+        for (const auto& point : detail.baselineTrajectory)
+            baseline.points.push_back({ point.lat, point.lon });
+        TrajectorySeries interleaved = baseline;
+        interleaved.name = QStringLiteral("%1#%2 交错")
+            .arg(qUtf8(object.modelName)).arg(object.localObjectId);
+        interleaved.baseline = false;
+        interleaved.points.clear();
+        for (const auto& point : detail.interleavedTrajectory)
+            interleaved.points.push_back({ point.lat, point.lon });
+        series.push_back(baseline);
+        series.push_back(interleaved);
+    }
+    m_pMultiObjectTrajectory->setSeries(series);
+    if (report.verdict.empty()) {
+        m_lblMultiObjectResult->setText(QStringLiteral("跨型号结果: 未执行"));
+    } else {
+        m_lblMultiObjectResult->setText(
+            QStringLiteral("跨型号结果: %1 — %2 | 型号=%3 | 对象=%4 | 最大偏差=%5 | 最大单帧=%6 ms")
+                .arg(qUtf8(report.verdict), qUtf8(report.summary))
+                .arg(report.modelCount)
+                .arg(report.totalObjectCount)
+                .arg(report.maxPositionDeviation, 0, 'g', 10)
+                .arg(report.maxFrameTimeMs, 0, 'f', 4));
+    }
+}
+
+void MainWindow::runFleetMultiObjectTest() {
+    saveMultiObjectEditor();
+    FleetMultiObjectTestConfig config;
+    config.stepCount = m_spnMultiObjectSteps->value();
+    config.stepDt = m_spnMultiObjectDt->value();
+    config.tolerance = m_spnMultiObjectTolerance->value();
+    config.schedule = static_cast<MultiObjectSchedule>(
+        m_comboMultiObjectSchedule->currentData().toInt());
+    config.randomSeed = 20260903u;
+
+    for (int row = 0; row < m_tblFleetMultiObjectModels->rowCount(); ++row) {
+        QTableWidgetItem* check = m_tblFleetMultiObjectModels->item(row, 0);
+        if (!check || check->checkState() != Qt::Checked) continue;
+        const int modelIndex = check->data(Qt::UserRole).toInt();
+        if (modelIndex < 0 || modelIndex >= static_cast<int>(m_models.size())) continue;
+        FleetModelEntry& entry = m_models[static_cast<size_t>(modelIndex)];
+        if (!entry.multiObjectHarness || !entry.multiObjectHarness->IsLoaded()) {
+            if (!prepareMultiObjectHarness(entry, modelIndex)
+                || !entry.multiObjectHarness
+                || !entry.multiObjectHarness->IsLoaded()) {
+                logMessage(QStringLiteral("ERROR: 型号「%1」多对象 Harness 未就绪，已跳过")
+                    .arg(entry.name));
+                continue;
+            }
+        }
+        if (!entry.multiObjectHarness->SupportsObjectSession()) {
+            logMessage(QStringLiteral(
+                "ERROR: 型号「%1」请重新「编译多对象 Harness」以启用跨型号对象调度")
+                .arg(entry.name));
+            continue;
+        }
+        FleetMultiObjectModelSpec spec;
+        spec.harness = entry.multiObjectHarness.get();
+        spec.modelName = qToUtf8(entry.name);
+        QSpinBox* spin = qobject_cast<QSpinBox*>(
+            m_tblFleetMultiObjectModels->cellWidget(row, 2));
+        spec.objectCount = spin ? spin->value() : qMax(1, entry.multiObjectCount);
+        config.models.push_back(spec);
+    }
+
+    if (config.models.size() < 2) {
+        QMessageBox::warning(this, QStringLiteral("跨型号对象交错"),
+            QStringLiteral("请至少勾选 2 个已编译且支持对象调度的型号。\n"
+                           "若型号已编译仍不可勾选，请重新点击「编译多对象 Harness」。"));
+        return;
+    }
+
+    ScopedBusyOverlay wait(this, QStringLiteral("正在运行跨型号对象交错…"));
+    FleetMultiObjectTestReport report;
+    wait.run([&]{ report = FleetSingleThreadMultiObjectTester::Run(config); });
+    for (const auto& line : report.logMessages)
+        logMessage(qDecodeLog(line));
+    updateFleetMultiObjectResultView(report);
+    m_latestFleetReport.fleetMultiObjectReport = report;
+    m_showSingleItemReport = false;
+    refreshReportBrowser();
+    logMessage(QStringLiteral("%1: 跨型号对象交错 — %2")
+        .arg(qUtf8(report.verdict), qUtf8(report.summary)));
+}
+
 void MainWindow::onMultiObjectResultSelectionChanged() {
     const int row = m_tblMultiObjectResults->currentRow();
-    m_pMultiObjectTrajectory->setHighlightedObject(row >= 0 ? row : -1);
+    if (row < 0) {
+        m_pMultiObjectTrajectory->setHighlightedObject(-1);
+        return;
+    }
+    if (m_showingFleetMultiObjectResults
+        && row < static_cast<int>(m_latestFleetMultiObjectReport.objectResults.size())) {
+        m_pMultiObjectTrajectory->setHighlightedObject(
+            m_latestFleetMultiObjectReport.objectResults[static_cast<size_t>(row)].globalObjectId);
+    } else {
+        m_pMultiObjectTrajectory->setHighlightedObject(row);
+    }
+}
+
+void MainWindow::onFleetMultiObjectSelectionChanged() {
+    // Reserved for future status tips; table checkboxes drive runFleetMultiObjectTest.
 }
 
 void MainWindow::compileCurrentModel() {
@@ -2713,27 +3253,39 @@ void MainWindow::compileCurrentModel() {
     }
 
     logMessage(QString("INFO: 开始编译型号「%1」...").arg(entry.name));
-    m_lblHarnessStatus->setText(QString("Harness: 正在编译「%1」…").arg(entry.name));
+    setHarnessStatusText(QString("Harness: 正在编译「%1」…").arg(entry.name),
+                         QStringLiteral("busy"));
     entry.status = QStringLiteral("编译中…");
     refreshModelListUi();
 
-    ScopedBusyOverlay wait(this, QString("正在编译型号「%1」…").arg(entry.name));
     UserHarnessConfig cfg = buildHarnessConfig(entry, m_currentModelIndex);
     entry.harness = std::make_shared<UserCodeHarness>();
     CompileResult cr;
-    UserCodeHarness* harnessPtr = entry.harness.get();
-    wait.run([&]{ cr = harnessPtr->Compile(cfg); });
+    {
+        ScopedBusyOverlay wait(this, QString("正在编译型号「%1」…").arg(entry.name));
+        UserCodeHarness* harnessPtr = entry.harness.get();
+        wait.run([&]{ cr = harnessPtr->Compile(cfg); });
+    }
     logMessage(qDecodeLog(cr.log));
     if (cr.success) {
         entry.status = QStringLiteral("已加载");
-        m_lblHarnessStatus->setText(QString("Harness: 已加载 — %1").arg(qUtf8(cr.dllPath)));
-        logMessage(QString("SUCCESS: 型号「%1」编译成功 → %2").arg(entry.name).arg(qUtf8(cr.dllPath)));
+        const QString path = qUtf8(cr.dllPath);
+        setHarnessStatusText(QString("Harness: 编译成功 — %1").arg(path),
+                             QStringLiteral("ok"));
+        logMessage(QString("SUCCESS: 型号「%1」编译成功 → %2").arg(entry.name).arg(path));
+        refreshModelListUi();
+        showOverlayResult(
+            QStringLiteral("编译成功\n\n%1\n%2").arg(entry.name, path), true);
     } else {
         entry.status = QStringLiteral("编译失败");
         entry.harness.reset();
-        m_lblHarnessStatus->setText("Harness: 编译失败（详见日志）");
+        setHarnessStatusText(QStringLiteral("Harness: 编译失败（详见日志）"),
+                             QStringLiteral("fail"));
+        refreshModelListUi();
+        showOverlayResult(
+            QStringLiteral("编译失败\n\n型号「%1」\n请查看下方日志").arg(entry.name),
+            false);
     }
-    refreshModelListUi();
 }
 
 void MainWindow::compileAllModels() {
@@ -2744,59 +3296,99 @@ void MainWindow::compileAllModels() {
     }
 
     logMessage("INFO: 开始编译全部型号 Harness...");
-    ScopedBusyOverlay wait(this, QString("正在编译全部型号 (0/%1)…").arg(m_models.size()));
 
     int ok = 0;
-    for (int i = 0; i < static_cast<int>(m_models.size()); ++i) {
-        FleetModelEntry& entry = m_models[static_cast<size_t>(i)];
-        wait.setText(QString("正在编译型号「%1」…\n(%2 / %3)")
-            .arg(entry.name).arg(i + 1).arg(m_models.size()));
-        entry.status = QStringLiteral("编译中…");
-        refreshModelListUi();
+    QString lastOkPath;
+    QString lastOkName;
+    {
+        ScopedBusyOverlay wait(this,
+            QString("正在编译全部型号\n(0 / %1)").arg(m_models.size()));
 
-        if (entry.headerPaths.isEmpty()) {
-            entry.status = QStringLiteral("失败:无头文件");
-            logMessage(QString("ERROR: 型号「%1」未勾选头文件").arg(entry.name));
-            continue;
-        }
-        if (entry.userMainBody.trimmed().isEmpty()) {
-            entry.status = QStringLiteral("失败:无UserMain");
-            logMessage(QString("ERROR: 型号「%1」UserMain 为空").arg(entry.name));
-            continue;
-        }
-        UserHarnessConfig cfg = buildHarnessConfig(entry, i);
-        entry.harness = std::make_shared<UserCodeHarness>();
-        CompileResult cr;
-        UserCodeHarness* harnessPtr = entry.harness.get();
-        wait.run([&]{ cr = harnessPtr->Compile(cfg); });
-        logMessage(QString("---- 型号「%1」编译日志 ----").arg(entry.name));
-        logMessage(qDecodeLog(cr.log));
-        if (cr.success) {
-            entry.status = QStringLiteral("已加载");
-            ++ok;
-            logMessage(QString("SUCCESS: 型号「%1」编译成功 → %2").arg(entry.name).arg(qUtf8(cr.dllPath)));
-        } else {
-            entry.status = QStringLiteral("编译失败");
-            entry.harness.reset();
+        for (int i = 0; i < static_cast<int>(m_models.size()); ++i) {
+            FleetModelEntry& entry = m_models[static_cast<size_t>(i)];
+            wait.setText(QString("正在编译型号「%1」…\n(%2 / %3)")
+                .arg(entry.name).arg(i + 1).arg(m_models.size()));
+            entry.status = QStringLiteral("编译中…");
+            setHarnessStatusText(QString("Harness: 正在编译「%1」… (%2/%3)")
+                                     .arg(entry.name).arg(i + 1).arg(m_models.size()),
+                                 QStringLiteral("busy"));
+            refreshModelListUi();
+
+            if (entry.headerPaths.isEmpty()) {
+                entry.status = QStringLiteral("失败:无头文件");
+                logMessage(QString("ERROR: 型号「%1」未勾选头文件").arg(entry.name));
+                continue;
+            }
+            if (entry.userMainBody.trimmed().isEmpty()) {
+                entry.status = QStringLiteral("失败:无UserMain");
+                logMessage(QString("ERROR: 型号「%1」UserMain 为空").arg(entry.name));
+                continue;
+            }
+            UserHarnessConfig cfg = buildHarnessConfig(entry, i);
+            entry.harness = std::make_shared<UserCodeHarness>();
+            CompileResult cr;
+            UserCodeHarness* harnessPtr = entry.harness.get();
+            wait.run([&]{ cr = harnessPtr->Compile(cfg); });
+            logMessage(QString("---- 型号「%1」编译日志 ----").arg(entry.name));
+            logMessage(qDecodeLog(cr.log));
+            if (cr.success) {
+                entry.status = QStringLiteral("已加载");
+                lastOkName = entry.name;
+                lastOkPath = qUtf8(cr.dllPath);
+                ++ok;
+                logMessage(QString("SUCCESS: 型号「%1」编译成功 → %2")
+                    .arg(entry.name).arg(lastOkPath));
+            } else {
+                entry.status = QStringLiteral("编译失败");
+                entry.harness.reset();
+            }
         }
     }
     refreshModelListUi();
     logMessage(QString("INFO: 型号编译完成 %1/%2 成功").arg(ok).arg(m_models.size()));
+    if (ok == static_cast<int>(m_models.size()) && ok > 0) {
+        QString status = QStringLiteral("Harness: 全部型号编译成功（%1/%2）")
+            .arg(ok).arg(m_models.size());
+        if (!lastOkPath.isEmpty())
+            status += QStringLiteral(" — %1").arg(lastOkPath);
+        setHarnessStatusText(status, QStringLiteral("ok"));
+        showOverlayResult(
+            QStringLiteral("全部编译成功\n\n（%1/%2）\n%3\n%4")
+                .arg(ok).arg(m_models.size()).arg(lastOkName, lastOkPath),
+            true);
+    } else if (ok > 0) {
+        setHarnessStatusText(
+            QStringLiteral("Harness: 部分成功（%1/%2），失败见日志")
+                .arg(ok).arg(m_models.size()),
+            QStringLiteral("fail"));
+        showOverlayResult(
+            QStringLiteral("部分编译成功\n\n（%1/%2）\n失败型号请查看日志")
+                .arg(ok).arg(m_models.size()),
+            false);
+    } else {
+        setHarnessStatusText(QStringLiteral("Harness: 全部型号编译失败（详见日志）"),
+                             QStringLiteral("fail"));
+        showOverlayResult(QStringLiteral("全部编译失败\n\n请查看下方日志"), false);
+    }
 }
 
 void MainWindow::addRandomVarRow() {
     int row = m_tblRandomVars->rowCount();
     m_tblRandomVars->insertRow(row);
+    m_tblRandomVars->setRowHeight(row, 28);
     QTableWidgetItem* en = new QTableWidgetItem();
+    en->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
     en->setCheckState(Qt::Checked);
     m_tblRandomVars->setItem(row, 0, en);
     m_tblRandomVars->setItem(row, 1, new QTableWidgetItem("var"));
     QComboBox* ty = new QComboBox(m_tblRandomVars);
+    ty->setFixedHeight(24);
     ty->addItem("double", 0);
     ty->addItem("int", 1);
     m_tblRandomVars->setCellWidget(row, 2, ty);
     m_tblRandomVars->setItem(row, 3, new QTableWidgetItem("0"));
     m_tblRandomVars->setItem(row, 4, new QTableWidgetItem("1"));
+    m_tblRandomVars->setRowHeight(row, 28);
 }
 
 void MainWindow::removeRandomVarRow() {
@@ -2830,6 +3422,9 @@ CombinedPrecheckReport MainWindow::runBuildPrecheck(const std::string& dllPath, 
     std::vector<std::string> searchPaths;
     if (!packageDir.empty()) {
         searchPaths.push_back(packageDir);
+        searchPaths.push_back(PackageScanner::ModelsDirectory(packageDir));
+        searchPaths.push_back(PackageScanner::LibDirectory(packageDir));
+        searchPaths.push_back(PackageScanner::IncludeDirectory(packageDir));
     }
 
     std::vector<std::string> reqExports = {};
