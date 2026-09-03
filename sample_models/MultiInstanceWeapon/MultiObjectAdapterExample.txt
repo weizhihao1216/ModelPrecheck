@@ -1,0 +1,21 @@
+// 头文件选择 WeaponObject.h，业务实现源码选择 WeaponObject.cpp，
+// 链接库选择 MultiInstanceWeapon.lib。
+class ModelObjectAdapter {
+public:
+    int Initialize(int objectId, const RandomBag& R, double dt) {
+        return m_object.Initialize(objectId, R.lat, R.lon, R.alt, R.speed, dt);
+    }
+
+    int Step(int stepIndex, double dt, double& outLat, double& outLon) {
+        (void)stepIndex;
+        (void)dt;
+        return m_object.Step(outLat, outLon);
+    }
+
+    void Destroy() {
+        m_object.Shutdown();
+    }
+
+private:
+    WeaponObject m_object;
+};

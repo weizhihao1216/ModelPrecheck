@@ -4,10 +4,20 @@
 #include <QWidget>
 #include <QVector>
 #include <QPointF>
+#include <QColor>
+#include <QString>
 
 struct TrajectoryPoint {
     double lat = 0.0;
     double lon = 0.0;
+};
+
+struct TrajectorySeries {
+    QString name;
+    int objectId = -1;
+    bool baseline = false;
+    QColor color;
+    QVector<TrajectoryPoint> points;
 };
 
 /** 2D ground track: Lon (X) × Lat (Y), polyline of step outputs. */
@@ -17,8 +27,11 @@ public:
     explicit TrajectoryViewWidget(QWidget* parent = nullptr);
 
     void setPoints(const QVector<TrajectoryPoint>& points);
+    void setSeries(const QVector<TrajectorySeries>& series);
+    void setHighlightedObject(int objectId);
+    void setEmptyHint(const QString& hint);
     void clearPoints();
-    int pointCount() const { return m_points.size(); }
+    int pointCount() const;
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -30,6 +43,11 @@ private:
                      const QRect& plot) const;
 
     QVector<TrajectoryPoint> m_points;
+    QVector<TrajectorySeries> m_series;
+    int m_highlightedObject = -1;
+    QString m_emptyHint =
+        QStringLiteral("暂无轨迹点\n请先编译型号，再点击「试跑并绘制轨迹」\n"
+                       "UserMain 中需用 out_lat/out_lon 调用 RecordTrajectoryPoint");
 };
 
 #endif // TRAJECTORY_VIEW_WIDGET_H

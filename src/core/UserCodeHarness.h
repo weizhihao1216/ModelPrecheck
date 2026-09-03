@@ -40,11 +40,15 @@ struct CompileResult {
     std::string log;
 };
 
-// Packed random values written in declaration order (enabled vars only)
+// Packed random values written in declaration order (enabled vars only).
+// For multi-object tests, values are packed per object:
+//   doubles: [obj0 vars...][obj1 vars...]...
+//   ints:    [obj0 vars...][obj1 vars...]...
 struct RandomValueBlob {
     std::vector<double> doubles; // also used to store ints as double then cast
     std::vector<int> ints;
     std::string summary; // human readable
+    int objectCount = 1;
 };
 
 struct TrajectorySample {

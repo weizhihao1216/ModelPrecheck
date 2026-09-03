@@ -116,6 +116,7 @@ std::string ReportGenerator::GenerateHtml(const CombinedPrecheckReport& report) 
     const bool trajectoryRan = report.trajReport.totalDataPoints > 0;
     const bool multiModelRan = !report.multiModelReport.verdict.empty();
     const bool multiThreadRan = !report.multiThreadReport.verdict.empty();
+    const bool multiObjectRan = !report.multiObjectReport.verdict.empty();
 
     auto statusCell = [](bool ran, bool pass) -> std::string {
         if (!ran) return "warn\">N/A";
@@ -168,6 +169,14 @@ std::string ReportGenerator::GenerateHtml(const CombinedPrecheckReport& report) 
          << (!multiThreadRan ? "warn\">N/A"
             : (report.multiThreadReport.verdict == "PASS" ? "pass\">PASS"
                : (report.multiThreadReport.verdict == "WARNING" ? "warn\">WARNING" : "fail\">FAIL")))
+         << "</td></tr>\n";
+    html << "    <tr><td>10. 单线程多对象测试</td><td>逐对象基线/单线程交错/状态串扰</td><td>"
+         << (multiObjectRan ? report.multiObjectReport.summary
+                            : (report.multiObjectConfigured ? "映射 Harness 尚未生成或未执行"
+                                                            : "未完成多对象接口映射"))
+         << "</td><td class=\""
+         << (!multiObjectRan ? "warn\">N/A"
+             : (report.multiObjectReport.verdict == "PASS" ? "pass\">PASS" : "fail\">FAIL"))
          << "</td></tr>\n"
          << "  </table>\n\n";
 
@@ -259,8 +268,30 @@ std::string ReportGenerator::GenerateHtml(const CombinedPrecheckReport& report) 
     emitConcCard("6. 多型号并行（多路径 DLL × 各型号数量）", report.multiModelReport);
     emitConcCard("7. 多线程稳定性（并行 UserMain）", report.multiThreadReport);
 
+    html << "  <h2>8. 单线程多对象基线/交错测试</h2>\n"
+         << "  <div class=\"card\">\n";
+    if (!multiObjectRan) {
+        html << "    <p class=\"warn\">"
+             << (report.multiObjectConfigured ? "映射 Harness 尚未生成或未执行"
+                                              : "未完成多对象接口映射")
+             << "</p>\n";
+    } else {
+        html << "    <p><b>对象数/步数:</b> " << report.multiObjectReport.objectCount
+             << " / " << report.multiObjectReport.stepCount << "</p>\n"
+             << "    <p><b>最大位置偏差:</b> " << report.multiObjectReport.maxPositionDeviation
+             << "（容差 " << report.multiObjectReport.tolerance << "）</p>\n"
+             << "    <p><b>异常/状态串扰:</b> " << report.multiObjectReport.exceptionCount
+             << " / " << report.multiObjectReport.interferenceCount << "</p>\n"
+             << "    <p><b>最大单帧耗时:</b> " << report.multiObjectReport.maxFrameTimeMs
+             << " ms | <b>内存变化:</b> " << report.multiObjectReport.memoryDeltaMB << " MB</p>\n"
+             << "    <p class=\"" << (report.multiObjectReport.verdict == "PASS" ? "pass" : "fail")
+             << "\">" << report.multiObjectReport.verdict << " — "
+             << report.multiObjectReport.summary << "</p>\n";
+    }
+    html << "  </div>\n\n";
+
     // Section Logs
-    html << "  <h2>8. 预检过程日志追踪</h2>\n"
+    html << "  <h2>9. 预检过程日志追踪</h2>\n"
          << "  <div class=\"log-box\">\n";
     for (const auto& logMsg : report.headerReport.logMessages) {
         html << "    <div>[Header] " << logMsg << "</div>\n";
@@ -276,6 +307,9 @@ std::string ReportGenerator::GenerateHtml(const CombinedPrecheckReport& report) 
     }
     for (const auto& logMsg : report.multiThreadReport.logMessages) {
         html << "    <div>[MultiThread] " << logMsg << "</div>\n";
+    }
+    for (const auto& logMsg : report.multiObjectReport.logMessages) {
+        html << "    <div>[MultiObject] " << logMsg << "</div>\n";
     }
     if (!report.perfReport.exceptionLog.empty()) {
         html << "    <div class=\"fail\">" << report.perfReport.exceptionLog << "</div>\n";
@@ -482,6 +516,19 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
     const bool perfRan = !fleetReport.perfReport.realtimeVerdict.empty();
     const bool multiModelRan = !fleetReport.multiModelReport.verdict.empty();
     const bool multiThreadRan = !fleetReport.multiThreadReport.verdict.empty();
+    int multiObjectConfigured = 0;
+    int multiObjectCompiled = 0;
+    int multiObjectTested = 0;
+    int multiObjectPassed = 0;
+    for (const auto& model : fleetReport.multiObjectReports) {
+        if (model.configured) ++multiObjectConfigured;
+        if (model.harnessCompiled) ++multiObjectCompiled;
+        if (!model.report.verdict.empty()) {
+            ++multiObjectTested;
+            if (model.report.verdict == "PASS") ++multiObjectPassed;
+        }
+    }
+    const bool multiObjectRan = multiObjectTested > 0;
     const bool packageRan = headerTotal > 0 || libTotal > 0 || peRan;
 
     bool anyFail = peRan && (dllPePass < dllTotal || dllLoadPass < dllTotal);
@@ -493,10 +540,11 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
         && fleetReport.trajectoryModelsPassed != fleetReport.trajectoryModelsTested) anyFail = true;
     if (fleetReport.multiModelReport.verdict == "FAIL") anyFail = true;
     if (fleetReport.multiThreadReport.verdict == "FAIL") anyFail = true;
+    if (multiObjectRan && multiObjectPassed < multiObjectTested) anyFail = true;
     if (!fleetReport.overallPass && peRan) anyFail = true;
 
-    std::string badgeColor = anyFail ? "#f38ba8" : (packageRan || perfRan || multiModelRan || multiThreadRan ? "#a6e3a1" : "#a6adc8");
-    std::string verdictText = anyFail ? "FAIL" : (packageRan || perfRan || multiModelRan || multiThreadRan ? "PASS" : "N/A");
+    std::string badgeColor = anyFail ? "#f38ba8" : (packageRan || perfRan || multiModelRan || multiThreadRan || multiObjectRan ? "#a6e3a1" : "#a6adc8");
+    std::string verdictText = anyFail ? "FAIL" : (packageRan || perfRan || multiModelRan || multiThreadRan || multiObjectRan ? "PASS" : "N/A");
 
     auto statusCell = [](bool ran, bool pass) -> std::string {
         if (!ran) return "warn\">N/A";
@@ -614,7 +662,21 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
          << "</td><td class=\""
          << (!multiThreadRan ? "warn\">N/A"
             : (fleetReport.multiThreadReport.verdict == "PASS" ? "pass\">PASS" : "fail\">FAIL"))
-         << "</td></tr>\n"
+         << "</td></tr>\n";
+    html << "    <tr><td>10. 单线程多对象测试</td><td>逐对象基线/单线程交错/状态串扰</td><td>";
+    if (!multiObjectRan) {
+        html << (multiObjectConfigured == 0
+            ? "未完成多对象接口映射"
+            : ("已完成映射 " + std::to_string(multiObjectConfigured)
+               + " 个，Harness 已验证 " + std::to_string(multiObjectCompiled) + " 个，未执行"))
+             << "</td><td class=\"warn\">N/A</td></tr>\n";
+    } else {
+        html << multiObjectPassed << "/" << multiObjectTested
+             << " 个已执行型号通过</td><td class=\""
+             << statusCell(true, multiObjectPassed == multiObjectTested)
+             << "</td></tr>\n";
+    }
+    html
          << "  </table>\n\n";
 
     html << "  <h2>2. 型号总览</h2>\n  <table>\n"
@@ -798,8 +860,61 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
     emitConcSection("9. 多线程稳定性（并行 UserMain）",
                     fleetReport.multiThreadReport, multiThreadRan);
 
-    // 10. 日志
-    html << "  <h2>10. 预检过程日志追踪</h2>\n"
+    html << "  <h2>10. 单线程多对象基线/交错测试</h2>\n";
+    if (fleetReport.multiObjectReports.empty()) {
+        html << "  <div class=\"card\"><p class=\"warn\">未完成多对象接口映射</p></div>\n";
+    }
+    for (const auto& model : fleetReport.multiObjectReports) {
+        html << "  <div class=\"model-section\"><h3>型号: " << model.modelName << "</h3>\n";
+        if (model.configured) {
+            const auto& mapping = model.mappingProfile;
+            html << "    <div class=\"card\"><p><b>DLL:</b> <code>"
+                 << mapping.dllPath << "</code></p><p><b>头文件:</b> <code>"
+                 << mapping.headerPath << "</code></p><p><b>生命周期映射:</b> "
+                 << mapping.createFunction.functionName << " → "
+                 << mapping.initFunction.functionName << " → "
+                 << mapping.stepFunction.functionName << " → "
+                 << mapping.destroyFunction.functionName
+                 << "</p><p><b>输出字段:</b> lat=" << mapping.latitudeField
+                 << "，lon=" << mapping.longitudeField
+                 << " | ABI 验证: " << (mapping.abiValidated ? "PASS" : "N/A")
+                 << "</p></div>\n";
+        }
+        if (!model.configured) {
+            html << "    <p class=\"warn\">N/A — 未完成多对象接口映射</p>\n";
+        } else if (!model.harnessCompiled || model.report.verdict.empty()) {
+            html << "    <p class=\"warn\">N/A — 映射 Harness 尚未生成、ABI 未验证或未执行</p>\n";
+        } else {
+            const auto& report = model.report;
+            html << "    <p>对象数: " << report.objectCount << " | 步数: " << report.stepCount
+                 << " | 最大偏差: " << report.maxPositionDeviation
+                 << " | 容差: " << report.tolerance
+                 << " | 最大单帧: " << report.maxFrameTimeMs << " ms"
+                 << " | 内存变化: " << report.memoryDeltaMB << " MB</p>\n"
+                 << "    <p class=\"" << (report.verdict == "PASS" ? "pass" : "fail")
+                 << "\">" << report.verdict << " — " << report.summary << "</p>\n"
+                 << "    <table><tr><th>对象</th><th>基线点</th><th>交错点</th>"
+                 << "<th>最大偏差</th><th>返回码(基线/交错)</th><th>SEH/异常位置</th><th>说明</th></tr>\n";
+            for (const auto& object : report.objectResults) {
+                html << "    <tr><td>Object #" << object.objectId << "</td><td>"
+                     << object.baselineTrajectory.size() << "</td><td>"
+                     << object.interleavedTrajectory.size() << "</td><td>"
+                     << object.maxPositionDeviation << "</td><td>"
+                     << object.baselineReturnCode << " / " << object.interleavedReturnCode
+                     << "</td><td class=\"" << (object.exceptionOccurred ? "fail" : "pass")
+                     << "\">" << (object.exceptionOccurred
+                         ? ("0x" + std::to_string(object.exceptionCode)
+                            + " step=" + std::to_string(object.faultStep))
+                         : "无")
+                     << "</td><td>" << object.detail << "</td></tr>\n";
+            }
+            html << "    </table>\n";
+        }
+        html << "  </div>\n";
+    }
+
+    // 11. 日志
+    html << "  <h2>11. 预检过程日志追踪</h2>\n"
          << "  <div class=\"log-box\">\n";
     bool anyLog = false;
     for (const auto& m : fleetReport.modelReports) {
@@ -842,6 +957,13 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
     for (const auto& logMsg : fleetReport.multiThreadReport.logMessages) {
         html << "    <div>[MultiThread] " << logMsg << "</div>\n";
         anyLog = true;
+    }
+    for (const auto& model : fleetReport.multiObjectReports) {
+        for (const auto& logMsg : model.report.logMessages) {
+            html << "    <div>[" << model.modelName << "/MultiObject] "
+                 << logMsg << "</div>\n";
+            anyLog = true;
+        }
     }
     if (!fleetReport.perfReport.exceptionLog.empty()) {
         html << "    <div class=\"fail\">[Perf] " << fleetReport.perfReport.exceptionLog << "</div>\n";

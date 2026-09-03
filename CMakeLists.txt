@@ -33,13 +33,23 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt5 COMPONENTS Widgets Charts REQUIRED)
+find_package(Qt5 COMPONENTS Widgets Charts PrintSupport REQUIRED)
+
+set(QSCINTILLA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/qscintilla-install")
+set(QSCINTILLA_INCLUDE_DIR "${QSCINTILLA_ROOT}/include")
+set(QSCINTILLA_LIBRARY "${QSCINTILLA_ROOT}/lib/qscintilla2_qt5.lib")
+if(NOT EXISTS "${QSCINTILLA_LIBRARY}")
+    message(FATAL_ERROR
+        "QScintilla static library not found at ${QSCINTILLA_LIBRARY}. "
+        "Build it first (see third_party/build_qscintilla.bat).")
+endif()
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/utils
+    ${QSCINTILLA_INCLUDE_DIR}
 )
 
 set(SOURCES
@@ -66,6 +76,12 @@ set(SOURCES
     src/core/ConcurrencyTester.cpp
     src/core/UserCodeHarness.h
     src/core/UserCodeHarness.cpp
+    src/core/MultiObjectHarness.h
+    src/core/MultiObjectHarness.cpp
+    src/core/InterfaceMappingProfile.h
+    src/core/InterfaceMappingProfile.cpp
+    src/core/SingleThreadMultiObjectTester.h
+    src/core/SingleThreadMultiObjectTester.cpp
     src/core/ReportGenerator.h
     src/core/ReportGenerator.cpp
     src/ui/LogConsoleWidget.h
@@ -74,10 +90,12 @@ set(SOURCES
     src/ui/ChartViewerWidget.cpp
     src/ui/TrajectoryViewWidget.h
     src/ui/TrajectoryViewWidget.cpp
-    src/ui/CppSyntaxHighlighter.h
-    src/ui/CppSyntaxHighlighter.cpp
     src/ui/CppCodeEditor.h
     src/ui/CppCodeEditor.cpp
+    src/ui/CppCodeCompletion.h
+    src/ui/CppCodeCompletion.cpp
+    src/ui/BusyOverlayWidget.h
+    src/ui/BusyOverlayWidget.cpp
     src/ui/MainWindow.h
     src/ui/MainWindow.cpp
     src/resources.qrc
@@ -88,6 +106,8 @@ add_executable(ModelValidator WIN32 ${SOURCES})
 target_link_libraries(ModelValidator PRIVATE
     Qt5::Widgets
     Qt5::Charts
+    Qt5::PrintSupport
+    "${QSCINTILLA_LIBRARY}"
     psapi.lib
 )
 
@@ -100,6 +120,22 @@ add_subdirectory(sample_models/ConflictWeaponB)
 add_subdirectory(sample_models/CompatibleWeaponC)
 add_subdirectory(sample_models/CompatibleWeaponD)
 add_subdirectory(sample_models/CompatibleWeaponE)
+add_subdirectory(sample_models/RenamedInterfaceWeapon)
+add_subdirectory(sample_models/PrecheckDemoWeapon)
+
+# Explicit smoke target for the generated multi-object adapter DLL and scheduler.
+add_executable(MultiObjectHarnessSmoke EXCLUDE_FROM_ALL
+    tests/MultiObjectHarnessSmoke.cpp
+    src/core/MultiObjectHarness.cpp
+    src/core/InterfaceMappingProfile.cpp
+    src/core/PeAnalyzer.cpp
+    src/core/SingleThreadMultiObjectTester.cpp
+    src/core/UserCodeHarness.cpp
+    src/utils/MemoryUtils.cpp
+    src/utils/SehHelper.cpp
+)
+target_compile_definitions(MultiObjectHarnessSmoke PRIVATE NOMINMAX)
+target_link_libraries(MultiObjectHarnessSmoke PRIVATE Qt5::Core psapi.lib)
 
 # Install configuration (Default target directory: ${CMAKE_SOURCE_DIR}/dist)
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
@@ -107,11 +143,21 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
 endif()
 
 install(TARGETS ModelValidator DESTINATION .)
-install(TARGETS StandardWeapon FaultyWeapon MultiInstanceWeapon
+install(TARGETS StandardWeapon FaultyWeapon MultiInstanceWeapon RenamedInterfaceWeapon
                 ConflictWeaponA ConflictWeaponB CompatibleWeaponC CompatibleWeaponD CompatibleWeaponE
         DESTINATION sample_models)
+install(TARGETS PrecheckDemoWeapon
+        RUNTIME DESTINATION sample_models/PrecheckDemoWeapon
+        ARCHIVE DESTINATION sample_models/PrecheckDemoWeapon
+        LIBRARY DESTINATION sample_models/PrecheckDemoWeapon)
+install(FILES
+        sample_models/PrecheckDemoWeapon/WeaponModel.h
+        sample_models/PrecheckDemoWeapon/WeaponObject.h
+        sample_models/PrecheckDemoWeapon/README.md
+        DESTINATION sample_models/PrecheckDemoWeapon)
 install(FILES sample_models/StandardWeapon/WeaponModel.h DESTINATION sample_models)
 install(FILES sample_models/MultiInstanceWeapon/WeaponModel.h DESTINATION sample_models RENAME WeaponModel_MultiInstance.h)
+install(FILES sample_models/RenamedInterfaceWeapon/WeaponModel.h DESTINATION sample_models RENAME WeaponModel_Renamed.h)
 install(FILES sample_models/ConflictWeaponA/WeaponModel.h DESTINATION sample_models RENAME WeaponModel_ConflictA.h)
 install(FILES sample_models/ConflictWeaponB/WeaponModel.h DESTINATION sample_models RENAME WeaponModel_ConflictB.h)
 install(FILES sample_models/CompatibleWeaponC/WeaponModel.h DESTINATION sample_models RENAME WeaponModel_CompatibleC.h)

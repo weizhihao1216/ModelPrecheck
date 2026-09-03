@@ -18,13 +18,15 @@ CppSyntaxHighlighter::CppSyntaxHighlighter(QTextDocument* parent)
     : QSyntaxHighlighter(parent)
     , m_commentStart(QStringLiteral("/\\*"))
     , m_commentEnd(QStringLiteral("\\*/")) {
-    const QTextCharFormat keyword = MakeFormat(QColor("#89b4fa"), true);
-    const QTextCharFormat type = MakeFormat(QColor("#94e2d5"), true);
-    const QTextCharFormat domain = MakeFormat(QColor("#cba6f7"), true);
-    const QTextCharFormat string = MakeFormat(QColor("#a6e3a1"));
-    const QTextCharFormat number = MakeFormat(QColor("#fab387"));
-    const QTextCharFormat preprocessor = MakeFormat(QColor("#f9e2af"));
-    const QTextCharFormat comment = MakeFormat(QColor("#7f849c"), false, true);
+    const QTextCharFormat keyword = MakeFormat(QColor("#22d3ee"), true);
+    const QTextCharFormat type = MakeFormat(QColor("#fde047"), true);
+    const QTextCharFormat domain = MakeFormat(QColor("#60a5fa"), true);
+    const QTextCharFormat function = MakeFormat(QColor("#c4b5fd"), true);
+    const QTextCharFormat member = MakeFormat(QColor("#ffffff"));
+    const QTextCharFormat string = MakeFormat(QColor("#4ade80"));
+    const QTextCharFormat number = MakeFormat(QColor("#fb923c"));
+    const QTextCharFormat preprocessor = MakeFormat(QColor("#ffffff"), true);
+    const QTextCharFormat comment = MakeFormat(QColor("#94a3b8"), false, true);
 
     const QStringList keywords = {
         "alignas", "alignof", "asm", "auto", "break", "case", "catch", "class",
@@ -39,22 +41,61 @@ CppSyntaxHighlighter::CppSyntaxHighlighter(QTextDocument* parent)
         m_rules.push_back({ QRegularExpression(QStringLiteral("\\b%1\\b").arg(word)), keyword });
     }
 
+    // Generic call sites first; later type/domain rules override known names.
+    m_rules.push_back({ QRegularExpression(QStringLiteral("\\b[A-Za-z_]\\w*(?=\\s*\\()")), function });
+
     const QStringList types = {
-        "bool", "char", "double", "float", "int", "long", "short", "signed",
-        "unsigned", "void", "wchar_t", "size_t", "uint32_t", "RandomBag",
-        "WeaponModelParams", "WeaponModelOutput"
+        "bool", "char", "char8_t", "char16_t", "char32_t", "wchar_t",
+        "double", "float", "int", "long", "short", "signed", "unsigned", "void",
+        "int8_t", "int16_t", "int32_t", "int64_t",
+        "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+        "size_t", "ssize_t", "ptrdiff_t", "intptr_t", "uintptr_t",
+        "intmax_t", "uintmax_t", "nullptr_t",
+        "string", "wstring", "u16string", "u32string",
+        "string_view", "wstring_view",
+        "vector", "array", "deque", "list", "forward_list",
+        "map", "multimap", "set", "multiset",
+        "unordered_map", "unordered_set", "unordered_multimap", "unordered_multiset",
+        "pair", "tuple", "optional", "variant", "any", "span",
+        "shared_ptr", "unique_ptr", "weak_ptr", "atomic",
+        "mutex", "recursive_mutex", "shared_mutex", "condition_variable",
+        "thread", "future", "promise", "packaged_task",
+        "ifstream", "ofstream", "fstream", "stringstream",
+        "ostringstream", "istringstream", "ostream", "istream", "iostream",
+        "FILE", "HANDLE", "HMODULE", "HWND", "DWORD", "WORD", "BYTE", "BOOL",
+        "HRESULT", "LPCSTR", "LPCWSTR", "LPSTR", "LPWSTR",
+        "RandomBag", "WeaponModelParams", "WeaponModelOutput", "RandomValueBlob",
+        "WeaponObject", "TrajectorySample", "QString", "QByteArray", "QStringList"
     };
     for (const QString& word : types) {
         m_rules.push_back({ QRegularExpression(QStringLiteral("\\b%1\\b").arg(word)), type });
     }
 
+    // std::string / std::vector / std::chrono::milliseconds / cv::Mat ...
+    m_rules.push_back({
+        QRegularExpression(QStringLiteral(
+            "\\b(?:std|cv|boost|glm|Eigen)"
+            "(?:::[A-Za-z_]\\w*)+\\b")),
+        type
+    });
+    // PascalCase or *_t / *_type before '<'
+    m_rules.push_back({
+        QRegularExpression(QStringLiteral(
+            "\\b(?:[A-Z][A-Za-z0-9_]*|[A-Za-z_]\\w*_(?:t|type|ptr|ref))\\b(?=\\s*<)")),
+        type
+    });
+
     const QStringList domainWords = {
-        "Model_Init", "Model_Step", "Model_Destroy", "Model_GetInfo",
-        "RecordTrajectoryPoint", "out_lat", "out_lon"
+        "Model_Create", "Model_Init", "Model_Step", "Model_Destroy", "Model_GetInfo",
+        "MoCreate", "MoInit", "MoStep", "MoDestroy",
+        "RecordTrajectoryPoint", "UserMain", "out_lat", "out_lon"
     };
     for (const QString& word : domainWords) {
         m_rules.push_back({ QRegularExpression(QStringLiteral("\\b%1\\b").arg(word)), domain });
     }
+
+    m_rules.push_back({ QRegularExpression(QStringLiteral("\\.\\s*([A-Za-z_]\\w*)")), member });
+    m_rules.push_back({ QRegularExpression(QStringLiteral("->\\s*([A-Za-z_]\\w*)")), member });
 
     m_rules.push_back({ QRegularExpression(QStringLiteral("\"(?:\\\\.|[^\"\\\\])*\"")), string });
     m_rules.push_back({ QRegularExpression(QStringLiteral("'(?:\\\\.|[^'\\\\])'")), string });

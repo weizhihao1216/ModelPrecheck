@@ -16,12 +16,38 @@ TrajectoryViewWidget::TrajectoryViewWidget(QWidget* parent)
 
 void TrajectoryViewWidget::setPoints(const QVector<TrajectoryPoint>& points) {
     m_points = points;
+    m_series.clear();
+    m_highlightedObject = -1;
+    update();
+}
+
+void TrajectoryViewWidget::setSeries(const QVector<TrajectorySeries>& series) {
+    m_series = series;
+    m_points.clear();
+    update();
+}
+
+void TrajectoryViewWidget::setHighlightedObject(int objectId) {
+    m_highlightedObject = objectId;
+    update();
+}
+
+void TrajectoryViewWidget::setEmptyHint(const QString& hint) {
+    m_emptyHint = hint;
     update();
 }
 
 void TrajectoryViewWidget::clearPoints() {
     m_points.clear();
+    m_series.clear();
+    m_highlightedObject = -1;
     update();
+}
+
+int TrajectoryViewWidget::pointCount() const {
+    int count = m_points.size();
+    for (const auto& series : m_series) count += series.points.size();
+    return count;
 }
 
 QPointF TrajectoryViewWidget::toScreen(double lon, double lat,
@@ -41,29 +67,46 @@ void TrajectoryViewWidget::paintEvent(QPaintEvent* /*event*/) {
     p.setRenderHint(QPainter::Antialiasing, true);
 
     const QRect area = rect().adjusted(8, 8, -8, -8);
-    p.fillRect(area, QColor("#1e1e2e"));
-    p.setPen(QPen(QColor("#45475a"), 1));
+    p.fillRect(area, QColor("#0c1218"));
+    p.setPen(QPen(QColor("#2d3f4f"), 1));
     p.drawRoundedRect(area, 6, 6);
 
     QRect plot = area.adjusted(52, 32, -16, -40);
-    p.setPen(QColor("#89b4fa"));
+    p.setPen(QColor("#14b8a6"));
     p.setFont(QFont(font().family(), 10, QFont::Bold));
     p.drawText(area.adjusted(12, 6, -12, 0), Qt::AlignLeft | Qt::AlignTop,
                QStringLiteral("二维轨迹 (经度 Lon × 纬度 Lat)"));
 
-    if (m_points.isEmpty()) {
-        p.setPen(QColor("#a6adc8"));
-        p.drawText(plot, Qt::AlignCenter,
-                   QStringLiteral("暂无轨迹点\n请先编译型号，再点击「试跑并绘制轨迹」\n"
-                                  "UserMain 中需用 out_lat/out_lon 调用 RecordTrajectoryPoint"));
+    if (m_points.isEmpty() && m_series.isEmpty()) {
+        p.setPen(QColor("#94a3b8"));
+        p.drawText(plot, Qt::AlignCenter, m_emptyHint);
         return;
     }
 
-    double minLon = m_points[0].lon, maxLon = minLon;
-    double minLat = m_points[0].lat, maxLat = minLat;
-    for (const auto& pt : m_points) {
+    TrajectoryPoint first;
+    bool hasFirst = false;
+    if (!m_points.isEmpty()) {
+        first = m_points.first();
+        hasFirst = true;
+    } else {
+        for (const auto& series : m_series) {
+            if (!series.points.isEmpty()) {
+                first = series.points.first();
+                hasFirst = true;
+                break;
+            }
+        }
+    }
+    if (!hasFirst) return;
+    double minLon = first.lon, maxLon = minLon;
+    double minLat = first.lat, maxLat = minLat;
+    auto includePoint = [&](const TrajectoryPoint& pt) {
         minLon = qMin(minLon, pt.lon); maxLon = qMax(maxLon, pt.lon);
         minLat = qMin(minLat, pt.lat); maxLat = qMax(maxLat, pt.lat);
+    };
+    for (const auto& pt : m_points) includePoint(pt);
+    for (const auto& series : m_series) {
+        for (const auto& pt : series.points) includePoint(pt);
     }
     auto pad = [](double& a, double& b) {
         double span = b - a;
@@ -80,7 +123,7 @@ void TrajectoryViewWidget::paintEvent(QPaintEvent* /*event*/) {
     pad(minLat, maxLat);
 
     // Grid
-    p.setPen(QPen(QColor("#313244"), 1, Qt::DotLine));
+    p.setPen(QPen(QColor("#1e3a34"), 1, Qt::DotLine));
     for (int i = 0; i <= 4; ++i) {
         const double t = i / 4.0;
         const double lon = minLon + t * (maxLon - minLon);
@@ -92,9 +135,9 @@ void TrajectoryViewWidget::paintEvent(QPaintEvent* /*event*/) {
     }
 
     // Axes
-    p.setPen(QPen(QColor("#585b70"), 1.5));
+    p.setPen(QPen(QColor("#2d3f4f"), 1.5));
     p.drawRect(plot);
-    p.setPen(QColor("#a6adc8"));
+    p.setPen(QColor("#94a3b8"));
     p.setFont(QFont(font().family(), 8));
     p.drawText(QRect(plot.left(), plot.bottom() + 4, plot.width(), 16),
                Qt::AlignCenter, QStringLiteral("经度 Lon"));
@@ -112,36 +155,53 @@ void TrajectoryViewWidget::paintEvent(QPaintEvent* /*event*/) {
     p.drawText(QPointF(area.left() + 8, plot.top() + 10),
                QString::number(maxLat, 'f', 5));
 
-    QVector<QPointF> poly;
-    poly.reserve(m_points.size());
-    for (const auto& pt : m_points) {
-        poly.push_back(toScreen(pt.lon, pt.lat, minLon, maxLon, minLat, maxLat, plot));
-    }
+    auto drawTrack = [&](const QVector<TrajectoryPoint>& points, const QColor& color,
+                         Qt::PenStyle style, qreal width) {
+        QVector<QPointF> poly;
+        poly.reserve(points.size());
+        for (const auto& point : points)
+            poly.push_back(toScreen(point.lon, point.lat, minLon, maxLon, minLat, maxLat, plot));
+        p.setPen(QPen(color, width, style));
+        p.setBrush(Qt::NoBrush);
+        for (int i = 1; i < poly.size(); ++i) p.drawLine(poly[i - 1], poly[i]);
+        if (!poly.isEmpty()) {
+            p.setPen(Qt::NoPen);
+            p.setBrush(color);
+            p.drawEllipse(poly.first(), 3.0, 3.0);
+            p.drawEllipse(poly.last(), 4.0, 4.0);
+        }
+    };
 
-    p.setPen(QPen(QColor("#cba6f7"), 2.0));
-    for (int i = 1; i < poly.size(); ++i) {
-        p.drawLine(poly[i - 1], poly[i]);
+    if (!m_series.isEmpty()) {
+        int legendX = plot.left() + 8;
+        int legendY = plot.top() + 8;
+        for (const auto& series : m_series) {
+            const bool highlighted = m_highlightedObject < 0
+                || m_highlightedObject == series.objectId;
+            QColor color = series.color.isValid() ? series.color : QColor("#2dd4bf");
+            if (!highlighted) color.setAlpha(65);
+            drawTrack(series.points, color,
+                      series.baseline ? Qt::DashLine : Qt::SolidLine,
+                      highlighted ? 2.2 : 1.0);
+            p.setPen(QPen(color, 2, series.baseline ? Qt::DashLine : Qt::SolidLine));
+            p.drawLine(legendX, legendY + 5, legendX + 22, legendY + 5);
+            p.setPen(QColor("#e2e8f0"));
+            p.drawText(legendX + 28, legendY + 10, series.name);
+            legendY += 16;
+        }
+        p.setPen(QColor("#e2e8f0"));
+        p.drawText(area.adjusted(12, 0, -12, -8), Qt::AlignLeft | Qt::AlignBottom,
+                   QStringLiteral("轨迹 %1 条 | 总点数 %2 | 虚线=基线，实线=交错")
+                       .arg(m_series.size()).arg(pointCount()));
+    } else {
+        drawTrack(m_points, QColor("#14b8a6"), Qt::SolidLine, 2.0);
+        const auto& last = m_points.last();
+        p.setPen(QColor("#e2e8f0"));
+        p.setFont(QFont(font().family(), 9));
+        p.drawText(area.adjusted(12, 0, -12, -8), Qt::AlignLeft | Qt::AlignBottom,
+                   QStringLiteral("点数 %1 | 末点 lat=%2  lon=%3")
+                       .arg(m_points.size())
+                       .arg(last.lat, 0, 'f', 6)
+                       .arg(last.lon, 0, 'f', 6));
     }
-
-    // Draw points (downsample if many)
-    const int step = qMax(1, poly.size() / 80);
-    for (int i = 0; i < poly.size(); i += step) {
-        const bool ends = (i == 0) || (i + step >= poly.size());
-        p.setBrush(ends ? QColor("#a6e3a1") : QColor("#89b4fa"));
-        p.setPen(Qt::NoPen);
-        p.drawEllipse(poly[i], ends ? 4.0 : 2.5, ends ? 4.0 : 2.5);
-    }
-    if (!poly.isEmpty()) {
-        p.setBrush(QColor("#f38ba8"));
-        p.drawEllipse(poly.last(), 4.5, 4.5);
-    }
-
-    const auto& last = m_points.last();
-    p.setPen(QColor("#cdd6f4"));
-    p.setFont(QFont(font().family(), 9));
-    p.drawText(area.adjusted(12, 0, -12, -8), Qt::AlignLeft | Qt::AlignBottom,
-               QStringLiteral("点数 %1 | 末点 lat=%2  lon=%3")
-                   .arg(m_points.size())
-                   .arg(last.lat, 0, 'f', 6)
-                   .arg(last.lon, 0, 'f', 6));
 }

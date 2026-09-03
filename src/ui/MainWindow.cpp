@@ -5,6 +5,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QSplitter>
 #include <QDateTime>
@@ -27,12 +28,13 @@
 
 #include "ChartViewerWidget.h"
 #include "TrajectoryViewWidget.h"
+#include "BusyOverlayWidget.h"
 #include "../utils/QtEncoding.h"
-
-#include <QProgressDialog>
 #include <QEventLoop>
 #include <QStyle>
 #include <algorithm>
+#include <functional>
+#include <set>
 
 namespace {
 
@@ -44,34 +46,24 @@ void FitButtonText(QPushButton* btn) {
     btn->setMinimumWidth(qMax(w, 72));
 }
 
-/** Modal busy dialog + wait cursor while harness compiles (blocks UI). */
-class CompileWaitIndicator {
+/** RAII wrapper for non-modal busy overlay during blocking work. */
+class ScopedBusyOverlay {
 public:
-    CompileWaitIndicator(QWidget* parent, const QString& text)
-        : m_dlg(text, QString(), 0, 0, parent) {
-        m_dlg.setWindowTitle(QStringLiteral("编译中"));
-        m_dlg.setWindowModality(Qt::ApplicationModal);
-        m_dlg.setCancelButton(nullptr);
-        m_dlg.setMinimumDuration(0);
-        m_dlg.setAutoClose(false);
-        m_dlg.setAutoReset(false);
-        m_dlg.show();
-        QApplication::setOverrideCursor(Qt::WaitCursor);
-        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    ScopedBusyOverlay(MainWindow* window, const QString& text)
+        : m_window(window) {
+        m_window->showBusyOverlay(text);
     }
+    ~ScopedBusyOverlay() { m_window->hideBusyOverlay(); }
 
-    ~CompileWaitIndicator() {
-        QApplication::restoreOverrideCursor();
-        m_dlg.hide();
-    }
+    void setText(const QString& text) { m_window->setBusyOverlayText(text); }
 
-    void setText(const QString& text) {
-        m_dlg.setLabelText(text);
-        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    /** Run work off the UI thread so the spinner keeps rotating. */
+    void run(const std::function<void()>& work) {
+        m_window->runBusyBlocking(work);
     }
 
 private:
-    QProgressDialog m_dlg;
+    MainWindow* m_window;
 };
 
 QString SanitizeModelFolderName(const QString& name) {
@@ -93,6 +85,15 @@ QString ExeTestModelRoot() {
         QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("TestModel")));
 }
 
+QString FindFirstModelDll(const QString& packageDir) {
+    if (packageDir.isEmpty() || !QDir(packageDir).exists()) return QString();
+    QDirIterator iterator(packageDir, QStringList() << QStringLiteral("*.dll"),
+                          QDir::Files, QDirIterator::Subdirectories);
+    if (!iterator.hasNext()) return QString();
+    return QDir::toNativeSeparators(
+        QFileInfo(iterator.next()).absoluteFilePath());
+}
+
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent)
@@ -107,6 +108,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     QWidget* centralWidget = new QWidget(this);
     setCentralWidget(centralWidget);
+    m_busyOverlay = new BusyOverlayWidget(centralWidget);
     QHBoxLayout* rootLayout = new QHBoxLayout(centralWidget);
     rootLayout->setContentsMargins(8, 8, 8, 8);
     rootLayout->setSpacing(8);
@@ -117,11 +119,11 @@ MainWindow::MainWindow(QWidget* parent)
 
     m_btnRunPrecheck = new QPushButton("一键预检全部型号", this);
     m_btnRunPrecheck->setStyleSheet(
-        "QPushButton { background-color: #0066cc; color: #ffffff; font-family: \"Microsoft YaHei UI\"; "
+        "QPushButton { background-color: #0d9488; color: #ffffff; font-family: \"Microsoft YaHei UI\"; "
         "font-weight: bold; font-size: 13px; "
-        "padding: 8px 18px; border-radius: 4px; } "
-        "QPushButton:hover { background-color: #ffd178; color: #002f86; } "
-        "QPushButton:pressed { background-color: #003d7a; }");
+        "padding: 8px 18px; border-radius: 4px; border: 1px solid #14b8a6; } "
+        "QPushButton:hover { background-color: #fbbf24; color: #1c1917; border-color: #fbbf24; } "
+        "QPushButton:pressed { background-color: #0f766e; }");
     FitButtonText(m_btnRunPrecheck);
 
     m_btnExportReport = new QPushButton("导出预检报告", this);
@@ -192,6 +194,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_listTestNavigation->addItem(QStringLiteral("运行轨迹查看"));
     m_listTestNavigation->addItem(QStringLiteral("多型号并行"));
     m_listTestNavigation->addItem(QStringLiteral("多线程稳定性"));
+    m_listTestNavigation->addItem(QStringLiteral("单线程多对象测试"));
     m_listTestNavigation->addItem(QStringLiteral("查看报告"));
     m_listTestNavigation->setProperty("testNavigation", true);
     navigationLayout->addWidget(m_listTestNavigation, 1);
@@ -232,7 +235,7 @@ MainWindow::MainWindow(QWidget* parent)
         QStringLiteral("提示：授权文件或文件夹请放在第三方模型 dll 同级目录，如不可用可复制一份放在本 exe 同级目录下。"),
         this);
     m_lblLicenseHint->setWordWrap(true);
-    m_lblLicenseHint->setStyleSheet("color: #60a5fa; font-size: 11px;");
+    m_lblLicenseHint->setStyleSheet("color: #14b8a6; font-size: 11px;");
     rightLayout->addLayout(formModel);
     rightLayout->addWidget(m_lblLicenseHint);
 
@@ -259,50 +262,82 @@ MainWindow::MainWindow(QWidget* parent)
 
     m_listHarnessHeaders = new QListWidget(this);
     m_listHarnessHeaders->setSelectionMode(QAbstractItemView::NoSelection);
-    m_listHarnessHeaders->setMinimumHeight(100);
-    m_listHarnessHeaders->setMaximumHeight(160);
+    m_listHarnessHeaders->setMinimumHeight(80);
+    m_listHarnessHeaders->setMaximumHeight(120);
     detailLayout->addWidget(m_listHarnessHeaders);
 
     QLabel* userMainTitle = new QLabel("步骤 3.2：编写 UserMain 函数体", this);
     userMainTitle->setProperty("sectionTitle", true);
     detailLayout->addWidget(userMainTitle);
-    m_editUserMain = new CppCodeEditor(this);
-    m_editUserMain->setMinimumHeight(180);
-    detailLayout->addWidget(m_editUserMain, 2);
+
+    QSplitter* userMainSplitter = new QSplitter(Qt::Vertical, this);
+    userMainSplitter->setObjectName(QStringLiteral("userMainSplitter"));
+    userMainSplitter->setChildrenCollapsible(false);
+    userMainSplitter->setHandleWidth(6);
+
+    m_editUserMain = new CppCodeEditor(userMainSplitter);
+    m_editUserMain->setMinimumHeight(80);
+    m_editUserMain->setMaximumHeight(QWIDGETSIZE_MAX);
+    m_editUserMain->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+
+    QWidget* userMainBelow = new QWidget(userMainSplitter);
+    userMainBelow->setMinimumHeight(80);
+    userMainBelow->setMaximumHeight(QWIDGETSIZE_MAX);
+    QVBoxLayout* belowLayout = new QVBoxLayout(userMainBelow);
+    belowLayout->setContentsMargins(0, 4, 0, 0);
+    belowLayout->setSpacing(8);
 
     QHBoxLayout* rndTitle = new QHBoxLayout();
-    QLabel* randomTitle = new QLabel("步骤 3.3：配置随机变量（R.变量名）", this);
+    QLabel* randomTitle = new QLabel("步骤 3.3：配置随机变量（R.变量名）", userMainBelow);
     randomTitle->setProperty("sectionTitle", true);
     rndTitle->addWidget(randomTitle);
-    m_btnAddRandomVar = new QPushButton("添加变量", this);
-    m_btnRemoveRandomVar = new QPushButton("删除选中", this);
+    m_btnAddRandomVar = new QPushButton("添加变量", userMainBelow);
+    m_btnRemoveRandomVar = new QPushButton("删除选中", userMainBelow);
     FitButtonText(m_btnAddRandomVar);
     FitButtonText(m_btnRemoveRandomVar);
     rndTitle->addStretch(1);
     rndTitle->addWidget(m_btnAddRandomVar);
     rndTitle->addWidget(m_btnRemoveRandomVar);
-    detailLayout->addLayout(rndTitle);
+    belowLayout->addLayout(rndTitle);
 
-    m_tblRandomVars = new QTableWidget(0, 5, this);
+    m_tblRandomVars = new QTableWidget(0, 5, userMainBelow);
     m_tblRandomVars->setHorizontalHeaderLabels({ "启用", "变量名", "类型", "最小值", "最大值" });
     m_tblRandomVars->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    m_tblRandomVars->setMinimumHeight(100);
-    m_tblRandomVars->setMaximumHeight(150);
-    detailLayout->addWidget(m_tblRandomVars);
+    m_tblRandomVars->setMinimumHeight(80);
+    m_tblRandomVars->setMaximumHeight(140);
+    belowLayout->addWidget(m_tblRandomVars);
 
     QHBoxLayout* layoutCompile = new QHBoxLayout();
-    m_btnCompileCurrent = new QPushButton("步骤 4：编译当前型号", this);
-    m_btnCompileAll = new QPushButton("编译全部型号", this);
+    m_btnCompileCurrent = new QPushButton("步骤 4：编译当前型号", userMainBelow);
+    m_btnCompileAll = new QPushButton("编译全部型号", userMainBelow);
     FitButtonText(m_btnCompileCurrent);
     FitButtonText(m_btnCompileAll);
     layoutCompile->addWidget(m_btnCompileCurrent);
     layoutCompile->addWidget(m_btnCompileAll);
     layoutCompile->addStretch(1);
-    detailLayout->addLayout(layoutCompile);
+    belowLayout->addLayout(layoutCompile);
 
-    m_lblHarnessStatus = new QLabel("Harness: 未编译", this);
+    m_lblHarnessStatus = new QLabel("Harness: 未编译", userMainBelow);
     m_lblHarnessStatus->setWordWrap(true);
-    detailLayout->addWidget(m_lblHarnessStatus);
+    belowLayout->addWidget(m_lblHarnessStatus);
+
+    userMainSplitter->addWidget(m_editUserMain);
+    userMainSplitter->addWidget(userMainBelow);
+    userMainSplitter->setStretchFactor(0, 10);
+    userMainSplitter->setStretchFactor(1, 1);
+    userMainSplitter->setSizes({ 900, 100 });
+    userMainSplitter->setMaximumHeight(QWIDGETSIZE_MAX);
+    // Expand scroll-area content when the user pulls the editor taller.
+    auto syncUserMainSplitterHeight = [userMainSplitter]() {
+        const QList<int> sizes = userMainSplitter->sizes();
+        int total = userMainSplitter->handleWidth() * qMax(0, sizes.size() - 1);
+        for (int size : sizes) total += size;
+        userMainSplitter->setMinimumHeight(qMax(total, 200));
+    };
+    QObject::connect(userMainSplitter, &QSplitter::splitterMoved,
+                     userMainSplitter, syncUserMainSplitterHeight);
+    syncUserMainSplitterHeight();
+    detailLayout->addWidget(userMainSplitter, 10);
     rightLayout->addWidget(m_modelDetailPanel, 1);
 
     // ========== Right tabs ==========
@@ -619,7 +654,175 @@ MainWindow::MainWindow(QWidget* parent)
     layoutTabMultiThr->addWidget(m_lblMultiThreadSummary);
     layoutTabMultiThr->addWidget(m_tblMultiThreadResults, 1);
 
-    // Tab 4: Report
+    // Single-thread multi-object baseline/interleaved comparison
+    QWidget* tabMultiObject = new QWidget(this);
+    QVBoxLayout* layoutTabMultiObject = new QVBoxLayout(tabMultiObject);
+    QLabel* multiObjectHint = new QLabel(
+        QStringLiteral("添加型号后即可使用（无需先编译 UserMain）。与型号配置共用头文件、模型包路径和随机变量；"
+                       "只需写 MoCreate / MoInit / MoStep / MoDestroy，对象数由本页「对象数」控制。"),
+        tabMultiObject);
+    multiObjectHint->setWordWrap(true);
+    multiObjectHint->setProperty("pageHint", true);
+    layoutTabMultiObject->addWidget(multiObjectHint);
+
+    m_lblMultiObjectPageHint = new QLabel(
+        QStringLiteral("请先在左侧添加型号；在「型号与 UserMain」中选择头文件与模型包路径后，再编写下方多对象代码。"),
+        tabMultiObject);
+    m_lblMultiObjectPageHint->setWordWrap(true);
+    m_lblMultiObjectPageHint->setProperty("pageHint", true);
+    layoutTabMultiObject->addWidget(m_lblMultiObjectPageHint);
+
+    QFormLayout* multiObjectFiles = new QFormLayout();
+    m_comboMultiObjectModel = new QComboBox(tabMultiObject);
+    multiObjectFiles->addRow(QStringLiteral("型号:"), m_comboMultiObjectModel);
+    layoutTabMultiObject->addLayout(multiObjectFiles);
+
+    QLabel* userMultiObjectTitle = new QLabel(
+        QStringLiteral("多对象代码（MoCreate / MoInit / MoStep / MoDestroy）"), tabMultiObject);
+    userMultiObjectTitle->setProperty("workflowStep", true);
+    layoutTabMultiObject->addWidget(userMultiObjectTitle);
+
+    QSplitter* multiObjectPageSplitter = new QSplitter(Qt::Vertical, tabMultiObject);
+    multiObjectPageSplitter->setChildrenCollapsible(false);
+    multiObjectPageSplitter->setHandleWidth(6);
+
+    m_editUserMultiObject = new CppCodeEditor(multiObjectPageSplitter);
+    m_editUserMultiObject->setMinimumHeight(80);
+    m_editUserMultiObject->setMaximumHeight(QWIDGETSIZE_MAX);
+    m_editUserMultiObject->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+
+    QWidget* multiObjectRest = new QWidget(multiObjectPageSplitter);
+    multiObjectRest->setMinimumHeight(160);
+    QVBoxLayout* multiObjectRestLayout = new QVBoxLayout(multiObjectRest);
+    multiObjectRestLayout->setContentsMargins(0, 4, 0, 0);
+    multiObjectRestLayout->setSpacing(8);
+
+    m_multiObjectLegacyPanel = new QWidget(multiObjectRest);
+    QVBoxLayout* legacyLayout = new QVBoxLayout(m_multiObjectLegacyPanel);
+    legacyLayout->setContentsMargins(0, 0, 0, 0);
+    m_editMultiObjectDll = new QLineEdit(m_multiObjectLegacyPanel);
+    m_editMultiObjectDll->setPlaceholderText(QStringLiteral("legacy"));
+    legacyLayout->addWidget(m_editMultiObjectDll);
+    m_comboMultiObjectHeader = new QComboBox(m_multiObjectLegacyPanel);
+    m_comboMultiObjectLib = new QComboBox(m_multiObjectLegacyPanel);
+    legacyLayout->addWidget(m_comboMultiObjectHeader);
+    legacyLayout->addWidget(m_comboMultiObjectLib);
+
+    QHBoxLayout* mappingActions = new QHBoxLayout();
+    m_btnAnalyzeMultiObject = new QPushButton(
+        QStringLiteral("legacy analyze"), m_multiObjectLegacyPanel);
+    m_btnValidateMultiObject = new QPushButton(
+        QStringLiteral("legacy validate"), m_multiObjectLegacyPanel);
+    mappingActions->addWidget(m_btnAnalyzeMultiObject);
+    mappingActions->addWidget(m_btnValidateMultiObject);
+    legacyLayout->addLayout(mappingActions);
+
+    QGroupBox* lifecycleGroup = new QGroupBox(
+        QStringLiteral("legacy lifecycle"), m_multiObjectLegacyPanel);
+    QGridLayout* lifecycleLayout = new QGridLayout(lifecycleGroup);
+    m_comboMultiObjectCreate = new QComboBox(lifecycleGroup);
+    m_comboMultiObjectInit = new QComboBox(lifecycleGroup);
+    m_comboMultiObjectStep = new QComboBox(lifecycleGroup);
+    m_comboMultiObjectDestroy = new QComboBox(lifecycleGroup);
+    lifecycleLayout->addWidget(m_comboMultiObjectCreate, 0, 1);
+    lifecycleLayout->addWidget(m_comboMultiObjectInit, 0, 3);
+    lifecycleLayout->addWidget(m_comboMultiObjectStep, 1, 1);
+    lifecycleLayout->addWidget(m_comboMultiObjectDestroy, 1, 3);
+    legacyLayout->addWidget(lifecycleGroup);
+
+    m_tblMultiObjectParameters = new QTableWidget(0, 6, m_multiObjectLegacyPanel);
+    m_tblMultiObjectFields = new QTableWidget(0, 7, m_multiObjectLegacyPanel);
+    legacyLayout->addWidget(m_tblMultiObjectParameters);
+    legacyLayout->addWidget(m_tblMultiObjectFields);
+
+    m_editMultiObjectHeader = new QLineEdit(m_multiObjectLegacyPanel);
+    m_editMultiObjectSource = new QLineEdit(m_multiObjectLegacyPanel);
+    m_editMultiObjectLib = new QLineEdit(m_multiObjectLegacyPanel);
+    m_editMultiObjectAdapter = new CppCodeEditor(m_multiObjectLegacyPanel);
+    legacyLayout->addWidget(m_editMultiObjectHeader);
+    legacyLayout->addWidget(m_editMultiObjectSource);
+    legacyLayout->addWidget(m_editMultiObjectLib);
+    legacyLayout->addWidget(m_editMultiObjectAdapter);
+    multiObjectRestLayout->addWidget(m_multiObjectLegacyPanel);
+    m_multiObjectLegacyPanel->hide();
+
+    QHBoxLayout* multiObjectOptions = new QHBoxLayout();
+    multiObjectOptions->addWidget(new QLabel(QStringLiteral("对象数:"), multiObjectRest));
+    m_spnMultiObjectCount = new QSpinBox(multiObjectRest);
+    m_spnMultiObjectCount->setRange(2, 64);
+    m_spnMultiObjectCount->setValue(3);
+    multiObjectOptions->addWidget(m_spnMultiObjectCount);
+    multiObjectOptions->addWidget(new QLabel(QStringLiteral("步数:"), multiObjectRest));
+    m_spnMultiObjectSteps = new QSpinBox(multiObjectRest);
+    m_spnMultiObjectSteps->setRange(1, 100000);
+    m_spnMultiObjectSteps->setValue(100);
+    multiObjectOptions->addWidget(m_spnMultiObjectSteps);
+    multiObjectOptions->addWidget(new QLabel(QStringLiteral("dt:"), multiObjectRest));
+    m_spnMultiObjectDt = new QDoubleSpinBox(multiObjectRest);
+    m_spnMultiObjectDt->setDecimals(6);
+    m_spnMultiObjectDt->setRange(0.000001, 60.0);
+    m_spnMultiObjectDt->setValue(0.02);
+    multiObjectOptions->addWidget(m_spnMultiObjectDt);
+    multiObjectOptions->addWidget(new QLabel(QStringLiteral("容差:"), multiObjectRest));
+    m_spnMultiObjectTolerance = new QDoubleSpinBox(multiObjectRest);
+    m_spnMultiObjectTolerance->setDecimals(12);
+    m_spnMultiObjectTolerance->setRange(0.0, 1.0);
+    m_spnMultiObjectTolerance->setValue(1e-8);
+    multiObjectOptions->addWidget(m_spnMultiObjectTolerance);
+    multiObjectOptions->addWidget(new QLabel(QStringLiteral("调度:"), multiObjectRest));
+    m_comboMultiObjectSchedule = new QComboBox(multiObjectRest);
+    m_comboMultiObjectSchedule->addItem(QStringLiteral("正序"), 0);
+    m_comboMultiObjectSchedule->addItem(QStringLiteral("逆序"), 1);
+    m_comboMultiObjectSchedule->addItem(QStringLiteral("固定种子随机顺序"), 2);
+    multiObjectOptions->addWidget(m_comboMultiObjectSchedule);
+    multiObjectOptions->addStretch(1);
+    multiObjectRestLayout->addLayout(multiObjectOptions);
+
+    QHBoxLayout* multiObjectActions = new QHBoxLayout();
+    m_btnCompileMultiObject = new QPushButton(QStringLiteral("编译多对象 Harness"), multiObjectRest);
+    m_btnRunMultiObject = new QPushButton(QStringLiteral("执行基线与交错测试"), multiObjectRest);
+    FitButtonText(m_btnCompileMultiObject);
+    FitButtonText(m_btnRunMultiObject);
+    multiObjectActions->addWidget(m_btnCompileMultiObject);
+    multiObjectActions->addWidget(m_btnRunMultiObject);
+    multiObjectActions->addStretch(1);
+    multiObjectRestLayout->addLayout(multiObjectActions);
+    m_lblMultiObjectAdapterStatus = new QLabel(QStringLiteral("适配状态: 未配置"), multiObjectRest);
+    m_lblMultiObjectResult = new QLabel(QStringLiteral("测试结果: 未执行"), multiObjectRest);
+    m_lblMultiObjectResult->setWordWrap(true);
+    multiObjectRestLayout->addWidget(m_lblMultiObjectAdapterStatus);
+    multiObjectRestLayout->addWidget(m_lblMultiObjectResult);
+
+    QSplitter* multiObjectSplitter = new QSplitter(Qt::Horizontal, multiObjectRest);
+    m_pMultiObjectTrajectory = new TrajectoryViewWidget(multiObjectSplitter);
+    m_pMultiObjectTrajectory->setEmptyHint(
+        QStringLiteral("暂无轨迹点\n请先编译多对象 Harness，再执行基线与交错测试\n"
+                       "轨迹通过 MoStep 中的 out_lat / out_lon 显示"));
+    m_pMultiObjectTrajectory->setMinimumHeight(120);
+    m_tblMultiObjectResults = new QTableWidget(0, 7, multiObjectSplitter);
+    m_tblMultiObjectResults->setHorizontalHeaderLabels({
+        QStringLiteral("对象"), QStringLiteral("基线点"), QStringLiteral("交错点"),
+        QStringLiteral("最大偏差"), QStringLiteral("基线返回"), QStringLiteral("交错返回"),
+        QStringLiteral("结果")
+    });
+    m_tblMultiObjectResults->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_tblMultiObjectResults->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_tblMultiObjectResults->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_tblMultiObjectResults->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    multiObjectSplitter->addWidget(m_pMultiObjectTrajectory);
+    multiObjectSplitter->addWidget(m_tblMultiObjectResults);
+    multiObjectSplitter->setStretchFactor(0, 3);
+    multiObjectSplitter->setStretchFactor(1, 4);
+    multiObjectRestLayout->addWidget(multiObjectSplitter, 1);
+
+    multiObjectPageSplitter->addWidget(m_editUserMultiObject);
+    multiObjectPageSplitter->addWidget(multiObjectRest);
+    multiObjectPageSplitter->setStretchFactor(0, 2);
+    multiObjectPageSplitter->setStretchFactor(1, 3);
+    multiObjectPageSplitter->setSizes({ 260, 560 });
+    layoutTabMultiObject->addWidget(multiObjectPageSplitter, 1);
+
+    // Report
     QWidget* tabReport = new QWidget(this);
     QVBoxLayout* layoutTabReport = new QVBoxLayout(tabReport);
     m_pReportBrowser = new QTextBrowser(this);
@@ -632,6 +835,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_pCentralTabs->addTab(tabPerf, "性能 / 内存 / 轨迹");
     m_pCentralTabs->addTab(tabMultiModel, "多型号并行");
     m_pCentralTabs->addTab(tabMultiThr, "多线程稳定性");
+    m_pCentralTabs->addTab(tabMultiObject, "单线程多对象测试");
     m_pCentralTabs->addTab(tabReport, "预检报告");
 
     QWidget* workflowPage = new QWidget(this);
@@ -737,6 +941,12 @@ MainWindow::MainWindow(QWidget* parent)
         updateWorkflowUi();
     });
     connect(m_btnRefreshModelHeaders, &QPushButton::clicked, this, &MainWindow::refreshCurrentModelHeaders);
+    connect(m_listHarnessHeaders, &QListWidget::itemChanged, this, [this](QListWidgetItem*) {
+        if (!m_blockModelUi) {
+            saveEditorsToCurrentModel();
+            refreshCodeEditorCompletions();
+        }
+    });
     connect(m_btnCompileCurrent, &QPushButton::clicked, this, &MainWindow::compileCurrentModel);
     connect(m_btnCompileAll, &QPushButton::clicked, this, &MainWindow::compileAllModels);
     connect(m_btnAddRandomVar, &QPushButton::clicked, this, &MainWindow::addRandomVarRow);
@@ -745,6 +955,12 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_btnRunTrajectory, &QPushButton::clicked, this, &MainWindow::runTrajectoryPreview);
     connect(m_btnRunMultiModel, &QPushButton::clicked, this, &MainWindow::runMultiModelTest);
     connect(m_btnRunMultiThread, &QPushButton::clicked, this, &MainWindow::runMultiThreadTest);
+    connect(m_comboMultiObjectModel, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onMultiObjectModelChanged);
+    connect(m_btnCompileMultiObject, &QPushButton::clicked, this, &MainWindow::compileMultiObjectAdapter);
+    connect(m_btnRunMultiObject, &QPushButton::clicked, this, &MainWindow::runMultiObjectTest);
+    connect(m_tblMultiObjectResults, &QTableWidget::itemSelectionChanged,
+            this, &MainWindow::onMultiObjectResultSelectionChanged);
     connect(m_btnCheckDllFile, &QPushButton::clicked, this, &MainWindow::runDllFileCheckOnly);
     connect(m_btnCheckDllLoad, &QPushButton::clicked, this, &MainWindow::runDllLoadCheckOnly);
     connect(m_btnCheckHeader, &QPushButton::clicked, this, &MainWindow::runHeaderCheckOnly);
@@ -785,23 +1001,71 @@ MainWindow::~MainWindow() {
 void MainWindow::applyDarkStyle() {
     qApp->setStyle("Fusion");
     QPalette darkPalette;
-    darkPalette.setColor(QPalette::Window, QColor("#1e1e2e"));
-    darkPalette.setColor(QPalette::WindowText, QColor("#cdd6f4"));
-    darkPalette.setColor(QPalette::Base, QColor("#181825"));
-    darkPalette.setColor(QPalette::AlternateBase, QColor("#313244"));
-    darkPalette.setColor(QPalette::ToolTipBase, QColor("#cdd6f4"));
-    darkPalette.setColor(QPalette::ToolTipText, QColor("#11111b"));
-    darkPalette.setColor(QPalette::Text, QColor("#cdd6f4"));
-    darkPalette.setColor(QPalette::Button, QColor("#313244"));
-    darkPalette.setColor(QPalette::ButtonText, QColor("#cdd6f4"));
-    darkPalette.setColor(QPalette::BrightText, QColor("#f38ba8"));
-    darkPalette.setColor(QPalette::Highlight, QColor("#89b4fa"));
-    darkPalette.setColor(QPalette::HighlightedText, QColor("#11111b"));
+    darkPalette.setColor(QPalette::Window, QColor("#0f1419"));
+    darkPalette.setColor(QPalette::WindowText, QColor("#e2e8f0"));
+    darkPalette.setColor(QPalette::Base, QColor("#141c24"));
+    darkPalette.setColor(QPalette::AlternateBase, QColor("#1a242e"));
+    darkPalette.setColor(QPalette::ToolTipBase, QColor("#e2e8f0"));
+    darkPalette.setColor(QPalette::ToolTipText, QColor("#0f1419"));
+    darkPalette.setColor(QPalette::Text, QColor("#e2e8f0"));
+    darkPalette.setColor(QPalette::Button, QColor("#1a242e"));
+    darkPalette.setColor(QPalette::ButtonText, QColor("#e2e8f0"));
+    darkPalette.setColor(QPalette::BrightText, QColor("#fbbf24"));
+    darkPalette.setColor(QPalette::Highlight, QColor("#0d9488"));
+    darkPalette.setColor(QPalette::HighlightedText, QColor("#ffffff"));
     qApp->setPalette(darkPalette);
 }
 
 void MainWindow::logMessage(const QString& msg) {
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this, msg]() { logMessage(msg); },
+                                  Qt::QueuedConnection);
+        return;
+    }
     m_pLogConsole->appendLog(msg);
+}
+
+void MainWindow::showBusyOverlay(const QString& text) {
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this, text]() { showBusyOverlay(text); },
+                                  Qt::QueuedConnection);
+        return;
+    }
+    if (m_busyOverlay) m_busyOverlay->showBusy(text);
+}
+
+void MainWindow::hideBusyOverlay() {
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this]() { hideBusyOverlay(); },
+                                  Qt::QueuedConnection);
+        return;
+    }
+    if (m_busyOverlay) m_busyOverlay->hideBusy();
+}
+
+void MainWindow::setBusyOverlayText(const QString& text) {
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this, text]() { setBusyOverlayText(text); },
+                                  Qt::QueuedConnection);
+        return;
+    }
+    if (m_busyOverlay) m_busyOverlay->setBusyText(text);
+}
+
+void MainWindow::runBusyBlocking(const std::function<void()>& work) {
+    if (m_busyOverlay) m_busyOverlay->runBlocking(work);
+    else if (work) work();
+}
+
+void MainWindow::refreshCodeEditorCompletions() {
+    QStringList headers;
+    if (m_currentModelIndex >= 0
+        && m_currentModelIndex < static_cast<int>(m_models.size())) {
+        headers = m_models[static_cast<size_t>(m_currentModelIndex)].headerPaths;
+    }
+    m_editUserMain->refreshCompletionsFromHeaders(headers);
+    m_editUserMultiObject->refreshCompletionsFromHeaders(headers);
+    m_editMultiObjectAdapter->refreshCompletionsFromHeaders(headers);
 }
 
 std::vector<RandomVarDef> MainWindow::DefaultRandomVars() {
@@ -867,7 +1131,7 @@ int MainWindow::currentModelIndex() const {
 }
 
 int MainWindow::selectedTestModelIndex(QComboBox* combo) const {
-    if (!combo) return -1;
+    if (!combo || combo->currentIndex() < 0) return -1;
     int idx = combo->currentData().toInt();
     if (idx < 0 || idx >= static_cast<int>(m_models.size())) return -1;
     return idx;
@@ -946,13 +1210,14 @@ void MainWindow::updateWorkflowUi() {
     const int navigationRow = m_listTestNavigation->currentRow();
     const bool testPageSelected = navigationRow >= 0;
     const bool testPageAccessible =
-        navigationRow == 9
+        navigationRow == 10
         || (navigationRow >= 0 && navigationRow <= 3 && !m_models.empty())
-        || (navigationRow >= 4 && navigationRow <= 8 && anyCompiled);
+        || (navigationRow >= 4 && navigationRow <= 8 && anyCompiled)
+        || (navigationRow == 9 && !m_models.empty());
     const bool navigationBlocked = testPageSelected && !testPageAccessible;
 
     if (navigationBlocked) {
-        m_emptyWorkflowPanel->setText(navigationRow <= 3
+        m_emptyWorkflowPanel->setText((navigationRow <= 3 || navigationRow == 9)
             ? QStringLiteral("<h2>请添加型号</h2>")
             : QStringLiteral("<h2>请添加型号并编译</h2>"));
     } else {
@@ -1010,6 +1275,24 @@ void MainWindow::updateWorkflowUi() {
     m_lblMultiThreadPageHint->setText(m_models.empty()
         ? QStringLiteral("请先添加型号并完成编译，才能执行多线程稳定性测试。")
         : QStringLiteral("当前没有已编译型号；型号下拉框只显示编译成功的型号。"));
+    m_comboMultiObjectModel->setEnabled(!m_models.empty());
+    FleetModelEntry* mappedEntry = selectedTestModel(m_comboMultiObjectModel);
+    const bool multiObjectReady = mappedEntry != nullptr;
+    m_lblMultiObjectPageHint->setVisible(!multiObjectReady);
+    m_lblMultiObjectPageHint->setText(m_models.empty()
+        ? QStringLiteral("请先在左侧点击「添加型号」。")
+        : QStringLiteral("请在「型号与 UserMain」中选择模型包路径并勾选至少一个头文件，以便编译多对象 Harness。"));
+    m_editUserMultiObject->setEnabled(multiObjectReady);
+    m_btnCompileMultiObject->setEnabled(
+        multiObjectReady && !mappedEntry->userMultiObjectBody.trimmed().isEmpty());
+    m_btnRunMultiObject->setEnabled(
+        mappedEntry && mappedEntry->multiObjectHarness
+        && mappedEntry->multiObjectHarness->IsLoaded());
+    m_spnMultiObjectCount->setEnabled(multiObjectReady);
+    m_spnMultiObjectSteps->setEnabled(multiObjectReady);
+    m_spnMultiObjectDt->setEnabled(multiObjectReady);
+    m_spnMultiObjectTolerance->setEnabled(multiObjectReady);
+    m_comboMultiObjectSchedule->setEnabled(multiObjectReady);
 
     if (hasSelection) {
         if (pathValid) {
@@ -1148,6 +1431,7 @@ void MainWindow::loadEditorsFromModel(int index) {
     }
 
     m_blockModelUi = false;
+    refreshCodeEditorCompletions();
     updateWorkflowUi();
 }
 
@@ -1228,6 +1512,17 @@ void MainWindow::refreshModelSelectors() {
     };
     refill(m_comboStressModel);
     refill(m_comboThreadModel);
+    {
+        const int previous = m_comboMultiObjectModel->currentData().toInt();
+        QSignalBlocker blocker(m_comboMultiObjectModel);
+        m_comboMultiObjectModel->clear();
+        for (int i = 0; i < static_cast<int>(m_models.size()); ++i)
+            m_comboMultiObjectModel->addItem(m_models[static_cast<size_t>(i)].name, i);
+        const int restore = m_comboMultiObjectModel->findData(previous);
+        m_comboMultiObjectModel->setCurrentIndex(
+            restore >= 0 ? restore
+                         : (m_comboMultiObjectModel->count() > 0 ? 0 : -1));
+    }
     refreshPeSelectors();
 }
 
@@ -1454,12 +1749,16 @@ void MainWindow::onTestNavigationChanged(int row) {
         tabIndex = row;
     } else if (row <= 6) {
         tabIndex = 4;
+    } else if (row <= 8) {
+        tabIndex = row - 2;
     } else {
         tabIndex = row - 2;
     }
 
-    if (row == 9) {
+    if (row == 10) {
         refreshReportBrowser();
+    } else if (row == 9) {
+        onMultiObjectModelChanged(m_comboMultiObjectModel->currentIndex());
     } else if (row <= 3) {
         refreshPeSelectors();
     }
@@ -1495,6 +1794,7 @@ void MainWindow::addModel() {
     entry.name = QStringLiteral("model%1").arg(m_models.size() + 1);
     entry.packageDir = QString();
     entry.userMainBody = qUtf8(UserCodeHarness::DefaultUserMainTemplate());
+    entry.userMultiObjectBody = qUtf8(MultiObjectHarness::DefaultUserMultiObjectTemplate());
     entry.randomVars = DefaultRandomVars();
     entry.instanceCount = 1;
     entry.status = QStringLiteral("未编译");
@@ -1585,6 +1885,7 @@ void MainWindow::refreshCurrentModelHeaders() {
         ++n;
     }
     saveEditorsToCurrentModel();
+    refreshCodeEditorCompletions();
     logMessage(QString("INFO: 型号「%1」头文件列表已刷新，共 %2 个").arg(entry.name).arg(n));
     updateWorkflowUi();
 }
@@ -1628,6 +1929,772 @@ UserHarnessConfig MainWindow::buildHarnessConfig(const FleetModelEntry& entry, i
     return cfg;
 }
 
+UserHarnessConfig MainWindow::buildUserMultiObjectConfig(
+    const FleetModelEntry& entry, int index) const {
+    UserHarnessConfig cfg = buildHarnessConfig(entry, index);
+    if (cfg.headerPaths.empty() && isModelPathValid(entry)) {
+        QDirIterator iterator(entry.packageDir,
+            QStringList() << QStringLiteral("*.h") << QStringLiteral("*.hpp"),
+            QDir::Files, QDirIterator::Subdirectories);
+        int count = 0;
+        while (iterator.hasNext() && count < 30) {
+            cfg.headerPaths.push_back(qToUtf8(QDir::toNativeSeparators(
+                QFileInfo(iterator.next()).absoluteFilePath())));
+            ++count;
+        }
+    }
+    if (cfg.randomVars.empty())
+        cfg.randomVars = DefaultRandomVars();
+    cfg.userMainBody = entry.userMultiObjectBody.trimmed().isEmpty()
+        ? MultiObjectHarness::DefaultUserMultiObjectTemplate()
+        : qToUtf8(entry.userMultiObjectBody);
+    const QString folder = QDir(ExeTestModelRoot()).filePath(
+        SanitizeModelFolderName(entry.name) + QStringLiteral("\\MultiObject"));
+    QDir().mkpath(folder);
+    cfg.workDir = qToUtf8(QDir::toNativeSeparators(folder));
+    cfg.outputBaseName = qToUtf8(
+        QStringLiteral("%1_UserMultiObject_%2")
+            .arg(SanitizeModelFolderName(entry.name)).arg(index));
+    return cfg;
+}
+
+bool MainWindow::isMultiObjectConfigured(const FleetModelEntry& entry) const {
+    if (entry.multiObjectHarness && entry.multiObjectHarness->IsLoaded())
+        return true;
+    return !entry.userMultiObjectBody.trimmed().isEmpty();
+}
+
+bool MainWindow::prepareMultiObjectHarness(FleetModelEntry& entry, int modelIndex) {
+    if (entry.multiObjectHarness && entry.multiObjectHarness->IsLoaded())
+        return true;
+
+    entry.multiObjectHarness = std::make_shared<MultiObjectHarness>();
+    if (!entry.userMultiObjectBody.trimmed().isEmpty()) {
+        const CompileResult result = entry.multiObjectHarness->CompileUserPool(
+            buildUserMultiObjectConfig(entry, modelIndex));
+        if (result.success) {
+            entry.multiObjectMapping.abiValidated = true;
+            entry.multiObjectMapping.validationMessage =
+                "用户多对象代码编译并加载成功";
+            return true;
+        }
+        entry.multiObjectHarness.reset();
+        return false;
+    }
+
+    const QString dllPath = FindFirstModelDll(entry.packageDir);
+    if (dllPath.isEmpty() || !QFileInfo::exists(dllPath)) return false;
+    entry.multiObjectDllPath = dllPath;
+    std::string loadError;
+    if (entry.multiObjectHarness->LoadModelDll(
+            qToUtf8(QDir::toNativeSeparators(dllPath)),
+            entry.randomVars, loadError)) {
+        entry.multiObjectMapping.abiValidated = true;
+        entry.multiObjectMapping.validationMessage =
+            "标准 Handle 接口自动识别（Model_Create/Init/Step/Destroy）";
+        entry.multiObjectMapping.dllPath = qToUtf8(dllPath);
+        return true;
+    }
+    entry.multiObjectHarness.reset();
+    return false;
+}
+
+QString MainWindow::multiObjectProfilePath(const FleetModelEntry& entry) const {
+    const QString folder = QDir(ExeTestModelRoot()).filePath(
+        SanitizeModelFolderName(entry.name));
+    return QDir(folder).filePath(QStringLiteral("multi_object_mapping.json"));
+}
+
+MultiObjectHarnessConfig MainWindow::buildMultiObjectHarnessConfig(
+    const FleetModelEntry& entry, int index) const {
+    MultiObjectHarnessConfig config;
+    config.adapterCode = qToUtf8(entry.multiObjectAdapterCode);
+    config.randomVars = entry.randomVars;
+    if (!entry.multiObjectHeaderPath.trimmed().isEmpty())
+        config.headerPaths.push_back(qToUtf8(QDir::toNativeSeparators(entry.multiObjectHeaderPath)));
+    if (!entry.multiObjectSourcePath.trimmed().isEmpty())
+        config.sourcePaths.push_back(qToUtf8(QDir::toNativeSeparators(entry.multiObjectSourcePath)));
+    if (!entry.multiObjectLibPath.trimmed().isEmpty())
+        config.linkLibs.push_back(qToUtf8(QDir::toNativeSeparators(entry.multiObjectLibPath)));
+
+    const QString libDirectory = QFileInfo(entry.multiObjectLibPath).absolutePath();
+    if (!libDirectory.isEmpty())
+        config.libPaths.push_back(qToUtf8(QDir::toNativeSeparators(libDirectory)));
+    const QString package = entry.packageDir.trimmed();
+    if (!package.isEmpty()) {
+        config.includeDirs.push_back(qToUtf8(QDir::toNativeSeparators(package)));
+        config.libPaths.push_back(qToUtf8(QDir::toNativeSeparators(package)));
+        const QStringList subdirectories = {
+            QStringLiteral("include"), QStringLiteral("Include"), QStringLiteral("inc"),
+            QStringLiteral("lib"), QStringLiteral("Lib"), QStringLiteral("x64/Release"),
+            QStringLiteral("Release"), QStringLiteral("lib/Release")
+        };
+        for (const QString& subdirectory : subdirectories) {
+            const QString path = QDir(package).filePath(subdirectory);
+            if (QDir(path).exists()) {
+                config.includeDirs.push_back(qToUtf8(QDir::toNativeSeparators(path)));
+                config.libPaths.push_back(qToUtf8(QDir::toNativeSeparators(path)));
+            }
+        }
+    }
+    const QString headerDirectory = QFileInfo(entry.multiObjectHeaderPath).absolutePath();
+    if (!headerDirectory.isEmpty())
+        config.includeDirs.push_back(qToUtf8(QDir::toNativeSeparators(headerDirectory)));
+    const QString sourceDirectory = QFileInfo(entry.multiObjectSourcePath).absolutePath();
+    if (!sourceDirectory.isEmpty())
+        config.includeDirs.push_back(qToUtf8(QDir::toNativeSeparators(sourceDirectory)));
+    const QString folder = SanitizeModelFolderName(entry.name);
+    const QString output = QDir(ExeTestModelRoot()).filePath(
+        folder + QStringLiteral("\\MultiObject"));
+    QDir().mkpath(output);
+    config.workDir = qToUtf8(QDir::toNativeSeparators(output));
+    config.outputBaseName = qToUtf8(
+        QStringLiteral("%1_MultiObject_%2").arg(folder).arg(index));
+    return config;
+}
+
+void MainWindow::saveMultiObjectEditor() {
+    if (m_loadedMultiObjectModelIndex < 0
+        || m_loadedMultiObjectModelIndex >= static_cast<int>(m_models.size())) return;
+    FleetModelEntry& entry =
+        m_models[static_cast<size_t>(m_loadedMultiObjectModelIndex)];
+    const QString oldBody = entry.userMultiObjectBody;
+    entry.userMultiObjectBody = m_editUserMultiObject->toPlainText();
+    entry.multiObjectCount = m_spnMultiObjectCount->value();
+    entry.multiObjectSteps = m_spnMultiObjectSteps->value();
+    entry.multiObjectDt = m_spnMultiObjectDt->value();
+    entry.multiObjectTolerance = m_spnMultiObjectTolerance->value();
+    entry.multiObjectSchedule = static_cast<MultiObjectSchedule>(
+        m_comboMultiObjectSchedule->currentData().toInt());
+    if (oldBody != entry.userMultiObjectBody) {
+        entry.multiObjectHarness.reset();
+        entry.multiObjectReport = MultiObjectTestReport();
+        entry.multiObjectMapping.abiValidated = false;
+    }
+}
+
+void MainWindow::loadMultiObjectEditor(int modelIndex) {
+    m_loadedMultiObjectModelIndex = modelIndex;
+    const bool valid = modelIndex >= 0 && modelIndex < static_cast<int>(m_models.size());
+    if (!valid) {
+        m_editUserMultiObject->clear();
+        m_lblMultiObjectAdapterStatus->setText(QStringLiteral("状态: 请先添加型号"));
+        m_tblMultiObjectResults->setRowCount(0);
+        m_pMultiObjectTrajectory->clearPoints();
+        return;
+    }
+    FleetModelEntry& entry = m_models[static_cast<size_t>(modelIndex)];
+    if (entry.userMultiObjectBody.trimmed().isEmpty()) {
+        entry.userMultiObjectBody =
+            qUtf8(MultiObjectHarness::DefaultUserMultiObjectTemplate());
+    }
+    m_editUserMultiObject->setPlainText(entry.userMultiObjectBody);
+    m_spnMultiObjectCount->setValue(entry.multiObjectCount);
+    m_spnMultiObjectSteps->setValue(entry.multiObjectSteps);
+    m_spnMultiObjectDt->setValue(entry.multiObjectDt);
+    m_spnMultiObjectTolerance->setValue(entry.multiObjectTolerance);
+    m_comboMultiObjectSchedule->setCurrentIndex(
+        m_comboMultiObjectSchedule->findData(static_cast<int>(entry.multiObjectSchedule)));
+    m_lblMultiObjectAdapterStatus->setText(
+        entry.multiObjectHarness && entry.multiObjectHarness->IsLoaded()
+            ? QStringLiteral("状态: 多对象 Harness 已加载 — %1")
+                .arg(qUtf8(entry.multiObjectHarness->DllPath()))
+            : QStringLiteral("状态: 请编写 MoCreate/MoInit/MoStep/MoDestroy 并编译 Harness"));
+    updateMultiObjectResultView(entry.multiObjectReport);
+    updateWorkflowUi();
+}
+
+void MainWindow::onMultiObjectModelChanged(int /*index*/) {
+    saveMultiObjectEditor();
+    loadMultiObjectEditor(selectedTestModelIndex(m_comboMultiObjectModel));
+}
+
+void MainWindow::analyzeMultiObjectInterface() {
+    saveMultiObjectEditor();
+    const int modelIndex = selectedTestModelIndex(m_comboMultiObjectModel);
+    if (modelIndex < 0) return;
+    FleetModelEntry& entry = m_models[static_cast<size_t>(modelIndex)];
+    const QString dllPath = QDir::toNativeSeparators(
+        m_editMultiObjectDll->text().trimmed());
+    const QString headerPath =
+        m_comboMultiObjectHeader->currentData().toString();
+    const QString libPath = m_comboMultiObjectLib->currentData().toString();
+    if (!QFileInfo::exists(dllPath) || !QFileInfo::exists(headerPath)) {
+        m_lblMultiObjectAdapterStatus->setText(
+            QStringLiteral("映射状态: 请选择有效的 DLL 和接口头文件"));
+        return;
+    }
+    const PeAnalysisReport pe = PeAnalyzer::AnalyzeDll(
+        qToUtf8(dllPath), { qToUtf8(entry.packageDir) }, {});
+    std::vector<std::string> exports;
+    for (const auto& symbol : pe.exportedSymbols) exports.push_back(symbol.name);
+    entry.multiObjectSchema = InterfaceSchemaAnalyzer::Analyze(
+        qToUtf8(headerPath), exports);
+    entry.multiObjectMapping = InterfaceSchemaAnalyzer::Suggest(
+        entry.multiObjectSchema, qToUtf8(entry.name),
+        qToUtf8(dllPath), qToUtf8(libPath));
+    entry.multiObjectDllPath = dllPath;
+    entry.multiObjectHarness.reset();
+    entry.multiObjectReport = MultiObjectTestReport();
+    rebuildMultiObjectMappingTables();
+    m_lblMultiObjectAdapterStatus->setText(
+        QStringLiteral("映射状态: 解析到 %1 个函数、%2 个结构体；请确认映射")
+            .arg(entry.multiObjectSchema.functions.size())
+            .arg(entry.multiObjectSchema.structs.size()));
+    logMessage(QStringLiteral("INFO: 接口 Schema 解析完成，DLL 导出 %1 个，候选函数 %2 个")
+        .arg(pe.exportedSymbols.size()).arg(entry.multiObjectSchema.functions.size()));
+}
+
+void MainWindow::onMultiObjectFunctionChanged() {
+    if (m_loadedMultiObjectModelIndex < 0
+        || m_loadedMultiObjectModelIndex >= static_cast<int>(m_models.size()))
+        return;
+    FleetModelEntry& entry =
+        m_models[static_cast<size_t>(m_loadedMultiObjectModelIndex)];
+    if (entry.multiObjectSchema.functions.empty()) return;
+    entry.multiObjectMapping.createFunction.functionName =
+        qToUtf8(m_comboMultiObjectCreate->currentData().toString());
+    entry.multiObjectMapping.initFunction.functionName =
+        qToUtf8(m_comboMultiObjectInit->currentData().toString());
+    entry.multiObjectMapping.stepFunction.functionName =
+        qToUtf8(m_comboMultiObjectStep->currentData().toString());
+    entry.multiObjectMapping.destroyFunction.functionName =
+        qToUtf8(m_comboMultiObjectDestroy->currentData().toString());
+
+    auto inferParameters = [&](FunctionBinding& binding, bool stepRole) {
+        binding.parameters.clear();
+        const auto* function = InterfaceSchemaAnalyzer::FindFunction(
+            entry.multiObjectSchema, binding.functionName);
+        if (!function) return;
+        for (int index = 0;
+             index < static_cast<int>(function->parameters.size()); ++index) {
+            const auto& parameter = function->parameters[static_cast<size_t>(index)];
+            ParameterBinding mapped;
+            mapped.parameterIndex = index;
+            mapped.typeName = parameter.type;
+            QString type = qUtf8(parameter.type);
+            type.remove(QStringLiteral("const"));
+            type.remove(QStringLiteral("struct"));
+            type.remove('*');
+            type.remove('&');
+            type = type.trimmed();
+            const bool structure =
+                InterfaceSchemaAnalyzer::FindStruct(
+                    entry.multiObjectSchema, qToUtf8(type)) != nullptr;
+            if (binding.role == "Destroy" && index == 0) {
+                mapped.source = MappingValueSource::Handle;
+            } else if (index == 0 && parameter.pointerDepth > 0 && !structure) {
+                mapped.source = MappingValueSource::Handle;
+                entry.multiObjectMapping.handleType = parameter.type;
+            } else if (structure) {
+                mapped.source = stepRole
+                    ? MappingValueSource::OutputStructPointer
+                    : MappingValueSource::InputStructPointer;
+                if (stepRole) entry.multiObjectMapping.outputStructType = qToUtf8(type);
+                else entry.multiObjectMapping.inputStructType = qToUtf8(type);
+            } else if (qUtf8(parameter.name).contains(
+                           QStringLiteral("dt"), Qt::CaseInsensitive)) {
+                mapped.source = MappingValueSource::DeltaTime;
+            } else if (qUtf8(parameter.name).contains(
+                           QStringLiteral("step"), Qt::CaseInsensitive)) {
+                mapped.source = MappingValueSource::StepIndex;
+            } else if (parameter.pointerDepth > 0) {
+                mapped.source = MappingValueSource::NullPointer;
+            } else {
+                mapped.source = MappingValueSource::FixedValue;
+                mapped.value = "0";
+            }
+            binding.parameters.push_back(mapped);
+        }
+    };
+    inferParameters(entry.multiObjectMapping.createFunction, false);
+    inferParameters(entry.multiObjectMapping.initFunction, false);
+    inferParameters(entry.multiObjectMapping.stepFunction, true);
+    inferParameters(entry.multiObjectMapping.destroyFunction, false);
+    entry.multiObjectMapping.mappingValidated = false;
+    rebuildMultiObjectMappingTables();
+}
+
+void MainWindow::rebuildMultiObjectMappingTables() {
+    if (m_loadedMultiObjectModelIndex < 0
+        || m_loadedMultiObjectModelIndex >= static_cast<int>(m_models.size()))
+        return;
+    FleetModelEntry& entry =
+        m_models[static_cast<size_t>(m_loadedMultiObjectModelIndex)];
+    auto fillFunctionCombo = [&](QComboBox* combo, const std::string& selected) {
+        QSignalBlocker blocker(combo);
+        combo->clear();
+        combo->addItem(QStringLiteral("未选择"), QString());
+        for (const auto& function : entry.multiObjectSchema.functions) {
+            if (!function.exportedByDll) continue;
+            combo->addItem(qUtf8(function.declaration), qUtf8(function.name));
+        }
+        const int index = combo->findData(qUtf8(selected));
+        combo->setCurrentIndex(index >= 0 ? index : 0);
+    };
+    fillFunctionCombo(m_comboMultiObjectCreate,
+                      entry.multiObjectMapping.createFunction.functionName);
+    fillFunctionCombo(m_comboMultiObjectInit,
+                      entry.multiObjectMapping.initFunction.functionName);
+    fillFunctionCombo(m_comboMultiObjectStep,
+                      entry.multiObjectMapping.stepFunction.functionName);
+    fillFunctionCombo(m_comboMultiObjectDestroy,
+                      entry.multiObjectMapping.destroyFunction.functionName);
+
+    auto addSourceItems = [](QComboBox* combo) {
+        const std::vector<MappingValueSource> sources = {
+            MappingValueSource::Handle, MappingValueSource::InputStructPointer,
+            MappingValueSource::InputStructValue,
+            MappingValueSource::OutputStructPointer,
+            MappingValueSource::OutputStructValue,
+            MappingValueSource::FixedValue, MappingValueSource::RandomVariable,
+            MappingValueSource::DeltaTime, MappingValueSource::StepIndex,
+            MappingValueSource::ObjectId, MappingValueSource::PreviousOutput,
+            MappingValueSource::NullPointer
+        };
+        for (const auto source : sources)
+            combo->addItem(QString::fromLatin1(
+                InterfaceSchemaAnalyzer::SourceName(source)),
+                static_cast<int>(source));
+    };
+    m_tblMultiObjectParameters->setRowCount(0);
+    auto addFunctionRows = [&](const FunctionBinding& binding) {
+        const auto* function = InterfaceSchemaAnalyzer::FindFunction(
+            entry.multiObjectSchema, binding.functionName);
+        if (!function) return;
+        for (const auto& mapped : binding.parameters) {
+            if (mapped.parameterIndex < 0
+                || mapped.parameterIndex >= static_cast<int>(function->parameters.size()))
+                continue;
+            const auto& parameter =
+                function->parameters[static_cast<size_t>(mapped.parameterIndex)];
+            const int row = m_tblMultiObjectParameters->rowCount();
+            m_tblMultiObjectParameters->insertRow(row);
+            m_tblMultiObjectParameters->setItem(row, 0,
+                new QTableWidgetItem(qUtf8(binding.role)));
+            m_tblMultiObjectParameters->setItem(row, 1,
+                new QTableWidgetItem(QString::number(mapped.parameterIndex)));
+            m_tblMultiObjectParameters->setItem(row, 2,
+                new QTableWidgetItem(qUtf8(parameter.name)));
+            m_tblMultiObjectParameters->setItem(row, 3,
+                new QTableWidgetItem(qUtf8(parameter.type)));
+            QComboBox* source = new QComboBox(m_tblMultiObjectParameters);
+            addSourceItems(source);
+            source->setCurrentIndex(source->findData(static_cast<int>(mapped.source)));
+            m_tblMultiObjectParameters->setCellWidget(row, 4, source);
+            m_tblMultiObjectParameters->setItem(row, 5,
+                new QTableWidgetItem(qUtf8(mapped.value)));
+        }
+    };
+    addFunctionRows(entry.multiObjectMapping.createFunction);
+    addFunctionRows(entry.multiObjectMapping.initFunction);
+    addFunctionRows(entry.multiObjectMapping.stepFunction);
+    addFunctionRows(entry.multiObjectMapping.destroyFunction);
+
+    std::set<std::string> usedStructures;
+    for (int row = 0; row < m_tblMultiObjectParameters->rowCount(); ++row) {
+        QComboBox* source =
+            qobject_cast<QComboBox*>(m_tblMultiObjectParameters->cellWidget(row, 4));
+        if (!source) continue;
+        const auto value = static_cast<MappingValueSource>(source->currentData().toInt());
+        if (value == MappingValueSource::InputStructPointer
+            || value == MappingValueSource::InputStructValue
+            || value == MappingValueSource::OutputStructPointer
+            || value == MappingValueSource::OutputStructValue) {
+            QString type = m_tblMultiObjectParameters->item(row, 3)->text();
+            type.remove(QStringLiteral("const"));
+            type.remove(QStringLiteral("struct"));
+            type.remove('*');
+            type.remove('&');
+            usedStructures.insert(qToUtf8(type.trimmed()));
+        }
+    }
+
+    m_tblMultiObjectFields->setRowCount(0);
+    for (const auto& structureName : usedStructures) {
+        std::set<std::string> visiting;
+        std::function<void(const std::string&, const std::string&)> addFields;
+        addFields = [&](const std::string& currentType, const std::string& prefix) {
+            const auto* structure = InterfaceSchemaAnalyzer::FindStruct(
+                entry.multiObjectSchema, currentType);
+            if (!structure || visiting.count(currentType)) return;
+            visiting.insert(currentType);
+            for (const auto& field : structure->fields) {
+                QString nestedType = qUtf8(field.type);
+                nestedType.remove(QStringLiteral("const"));
+                nestedType.remove(QStringLiteral("struct"));
+                nestedType.remove('*');
+                nestedType.remove('&');
+                nestedType = nestedType.trimmed();
+                const std::string fieldPath =
+                    prefix.empty() ? field.name : prefix + "." + field.name;
+                if (field.pointerDepth == 0
+                    && InterfaceSchemaAnalyzer::FindStruct(
+                        entry.multiObjectSchema, qToUtf8(nestedType))) {
+                    addFields(qToUtf8(nestedType), fieldPath);
+                    continue;
+                }
+            const int row = m_tblMultiObjectFields->rowCount();
+            m_tblMultiObjectFields->insertRow(row);
+            m_tblMultiObjectFields->setItem(row, 0,
+                new QTableWidgetItem(qUtf8(structureName)));
+            m_tblMultiObjectFields->setItem(row, 1,
+                new QTableWidgetItem(qUtf8(fieldPath)));
+            m_tblMultiObjectFields->setItem(row, 2,
+                new QTableWidgetItem(qUtf8(field.type)));
+            QComboBox* usage = new QComboBox(m_tblMultiObjectFields);
+            usage->addItems({ QStringLiteral("输入"), QStringLiteral("不使用"),
+                QStringLiteral("纬度输出"), QStringLiteral("经度输出"),
+                QStringLiteral("状态输出") });
+            if (structureName == entry.multiObjectMapping.outputStructType) {
+                if (fieldPath == entry.multiObjectMapping.latitudeField)
+                    usage->setCurrentText(QStringLiteral("纬度输出"));
+                else if (fieldPath == entry.multiObjectMapping.longitudeField)
+                    usage->setCurrentText(QStringLiteral("经度输出"));
+                else if (fieldPath == entry.multiObjectMapping.statusField)
+                    usage->setCurrentText(QStringLiteral("状态输出"));
+                else usage->setCurrentText(QStringLiteral("不使用"));
+            }
+            m_tblMultiObjectFields->setCellWidget(row, 3, usage);
+            QComboBox* source = new QComboBox(m_tblMultiObjectFields);
+            addSourceItems(source);
+            const StructFieldBinding* existing = nullptr;
+            for (const auto& binding : entry.multiObjectMapping.fieldBindings) {
+                if (binding.structType == structureName
+                    && binding.fieldPath == fieldPath) {
+                    existing = &binding;
+                    break;
+                }
+            }
+            const MappingValueSource defaultSource =
+                existing ? existing->source : MappingValueSource::FixedValue;
+            source->setCurrentIndex(source->findData(static_cast<int>(defaultSource)));
+            m_tblMultiObjectFields->setCellWidget(row, 4, source);
+            m_tblMultiObjectFields->setItem(row, 5,
+                new QTableWidgetItem(existing ? qUtf8(existing->value)
+                                              : QStringLiteral("0")));
+            m_tblMultiObjectFields->setItem(row, 6,
+                new QTableWidgetItem(existing
+                    ? QString::number(existing->objectOffset, 'g', 10)
+                    : QStringLiteral("0")));
+            }
+            visiting.erase(currentType);
+        };
+        addFields(structureName, std::string());
+        }
+}
+
+void MainWindow::saveMultiObjectMappingFromUi() {
+    if (m_loadedMultiObjectModelIndex < 0
+        || m_loadedMultiObjectModelIndex >= static_cast<int>(m_models.size()))
+        return;
+    FleetModelEntry& entry =
+        m_models[static_cast<size_t>(m_loadedMultiObjectModelIndex)];
+    InterfaceMappingProfile& profile = entry.multiObjectMapping;
+    profile.modelName = qToUtf8(entry.name);
+    profile.dllPath = qToUtf8(
+        QDir::toNativeSeparators(m_editMultiObjectDll->text().trimmed()));
+    profile.headerPath = qToUtf8(
+        m_comboMultiObjectHeader->currentData().toString());
+    profile.libPath = qToUtf8(m_comboMultiObjectLib->currentData().toString());
+    profile.createFunction.functionName =
+        qToUtf8(m_comboMultiObjectCreate->currentData().toString());
+    profile.initFunction.functionName =
+        qToUtf8(m_comboMultiObjectInit->currentData().toString());
+    profile.stepFunction.functionName =
+        qToUtf8(m_comboMultiObjectStep->currentData().toString());
+    profile.destroyFunction.functionName =
+        qToUtf8(m_comboMultiObjectDestroy->currentData().toString());
+    profile.createFunction.parameters.clear();
+    profile.initFunction.parameters.clear();
+    profile.stepFunction.parameters.clear();
+    profile.destroyFunction.parameters.clear();
+    auto functionForRole = [&](const QString& role) -> FunctionBinding* {
+        if (role == QStringLiteral("Create")) return &profile.createFunction;
+        if (role == QStringLiteral("Init")) return &profile.initFunction;
+        if (role == QStringLiteral("Step")) return &profile.stepFunction;
+        return &profile.destroyFunction;
+    };
+    for (int row = 0; row < m_tblMultiObjectParameters->rowCount(); ++row) {
+        ParameterBinding binding;
+        binding.parameterIndex = m_tblMultiObjectParameters->item(row, 1)->text().toInt();
+        binding.typeName = qToUtf8(m_tblMultiObjectParameters->item(row, 3)->text());
+        QComboBox* source =
+            qobject_cast<QComboBox*>(m_tblMultiObjectParameters->cellWidget(row, 4));
+        binding.source = source
+            ? static_cast<MappingValueSource>(source->currentData().toInt())
+            : MappingValueSource::NullPointer;
+        binding.value = qToUtf8(m_tblMultiObjectParameters->item(row, 5)->text().trimmed());
+        functionForRole(m_tblMultiObjectParameters->item(row, 0)->text())
+            ->parameters.push_back(binding);
+        QString type = qUtf8(binding.typeName);
+        type.remove(QStringLiteral("const"));
+        type.remove(QStringLiteral("struct"));
+        type.remove('*');
+        type.remove('&');
+        if (binding.source == MappingValueSource::InputStructPointer
+            || binding.source == MappingValueSource::InputStructValue)
+            profile.inputStructType = qToUtf8(type.trimmed());
+        if (binding.source == MappingValueSource::OutputStructPointer
+            || binding.source == MappingValueSource::OutputStructValue)
+            profile.outputStructType = qToUtf8(type.trimmed());
+        if (binding.source == MappingValueSource::Handle)
+            profile.handleType = binding.typeName;
+    }
+    profile.fieldBindings.clear();
+    profile.latitudeField.clear();
+    profile.longitudeField.clear();
+    profile.statusField.clear();
+    for (int row = 0; row < m_tblMultiObjectFields->rowCount(); ++row) {
+        const std::string structure =
+            qToUtf8(m_tblMultiObjectFields->item(row, 0)->text());
+        const std::string field =
+            qToUtf8(m_tblMultiObjectFields->item(row, 1)->text());
+        QComboBox* usage =
+            qobject_cast<QComboBox*>(m_tblMultiObjectFields->cellWidget(row, 3));
+        const QString purpose = usage ? usage->currentText() : QString();
+        if (purpose == QStringLiteral("纬度输出")) profile.latitudeField = field;
+        else if (purpose == QStringLiteral("经度输出")) profile.longitudeField = field;
+        else if (purpose == QStringLiteral("状态输出")) profile.statusField = field;
+        else if (purpose == QStringLiteral("输入")) {
+            StructFieldBinding binding;
+            binding.structType = structure;
+            binding.fieldPath = field;
+            QComboBox* source =
+                qobject_cast<QComboBox*>(m_tblMultiObjectFields->cellWidget(row, 4));
+            binding.source = source
+                ? static_cast<MappingValueSource>(source->currentData().toInt())
+                : MappingValueSource::FixedValue;
+            binding.value =
+                qToUtf8(m_tblMultiObjectFields->item(row, 5)->text().trimmed());
+            binding.objectOffset =
+                m_tblMultiObjectFields->item(row, 6)->text().toDouble();
+            profile.fieldBindings.push_back(binding);
+        }
+    }
+}
+
+void MainWindow::validateMultiObjectMapping() {
+    saveMultiObjectMappingFromUi();
+    const int modelIndex = selectedTestModelIndex(m_comboMultiObjectModel);
+    if (modelIndex < 0) return;
+    FleetModelEntry& entry = m_models[static_cast<size_t>(modelIndex)];
+    std::vector<std::string> errors;
+    if (!InterfaceSchemaAnalyzer::Validate(
+            entry.multiObjectSchema, entry.multiObjectMapping, errors)) {
+        m_lblMultiObjectAdapterStatus->setText(
+            QStringLiteral("映射状态: 验证失败 — %1")
+                .arg(errors.empty() ? QStringLiteral("未知错误")
+                                    : qUtf8(errors.front())));
+        for (const auto& error : errors)
+            logMessage(QStringLiteral("ERROR: 多对象映射：%1").arg(qUtf8(error)));
+        return;
+    }
+    std::string saveError;
+    if (!entry.multiObjectMapping.SaveJson(
+            qToUtf8(multiObjectProfilePath(entry)), saveError)) {
+        m_lblMultiObjectAdapterStatus->setText(
+            QStringLiteral("映射状态: 保存失败 — %1").arg(qUtf8(saveError)));
+        return;
+    }
+    entry.multiObjectHarness.reset();
+    m_lblMultiObjectAdapterStatus->setText(
+        QStringLiteral("映射状态: 验证通过并已保存，可生成 Harness"));
+    logMessage(QStringLiteral("SUCCESS: 接口映射已保存到 %1")
+        .arg(multiObjectProfilePath(entry)));
+    updateWorkflowUi();
+}
+
+void MainWindow::browseMultiObjectDll() {
+    const QString start = m_editMultiObjectDll->text().isEmpty()
+        ? (selectedTestModel(m_comboMultiObjectModel)
+            ? selectedTestModel(m_comboMultiObjectModel)->packageDir : QString())
+        : m_editMultiObjectDll->text();
+    const QString file = QFileDialog::getOpenFileName(
+        this, QStringLiteral("选择第三方模型 DLL"), start,
+        QStringLiteral("动态库 (*.dll);;所有文件 (*.*)"));
+    if (!file.isEmpty())
+        m_editMultiObjectDll->setText(QDir::toNativeSeparators(file));
+    saveMultiObjectEditor();
+    updateWorkflowUi();
+}
+
+void MainWindow::browseMultiObjectHeader() {
+    const QString file = QFileDialog::getOpenFileName(
+        this, QStringLiteral("选择适配或业务头文件"),
+        m_editMultiObjectHeader->text(), QStringLiteral("C++ 头文件 (*.h *.hpp);;所有文件 (*.*)"));
+    if (!file.isEmpty()) m_editMultiObjectHeader->setText(QDir::toNativeSeparators(file));
+    saveMultiObjectEditor();
+    updateWorkflowUi();
+}
+
+void MainWindow::browseMultiObjectSource() {
+    const QString file = QFileDialog::getOpenFileName(
+        this, QStringLiteral("选择业务实现源码"),
+        m_editMultiObjectSource->text(), QStringLiteral("C++ 源文件 (*.cpp *.cc *.cxx);;所有文件 (*.*)"));
+    if (!file.isEmpty()) m_editMultiObjectSource->setText(QDir::toNativeSeparators(file));
+    saveMultiObjectEditor();
+}
+
+void MainWindow::browseMultiObjectLib() {
+    const QString file = QFileDialog::getOpenFileName(
+        this, QStringLiteral("选择链接库"),
+        m_editMultiObjectLib->text(), QStringLiteral("LIB 库 (*.lib);;所有文件 (*.*)"));
+    if (!file.isEmpty()) m_editMultiObjectLib->setText(QDir::toNativeSeparators(file));
+    saveMultiObjectEditor();
+}
+
+void MainWindow::compileMultiObjectAdapter() {
+    saveMultiObjectEditor();
+    const int modelIndex = selectedTestModelIndex(m_comboMultiObjectModel);
+    if (modelIndex < 0) return;
+    FleetModelEntry& entry = m_models[static_cast<size_t>(modelIndex)];
+    if (entry.userMultiObjectBody.trimmed().isEmpty()) {
+        logMessage(QStringLiteral("ERROR: 请编写多对象代码（MoCreate/MoInit/MoStep/MoDestroy）"));
+        return;
+    }
+    if (buildUserMultiObjectConfig(entry, modelIndex).headerPaths.empty()) {
+        logMessage(QStringLiteral("ERROR: 请先在「型号与 UserMain」选择模型包路径并勾选头文件"));
+        return;
+    }
+    ScopedBusyOverlay wait(this,
+        QStringLiteral("正在编译多对象 Harness…"));
+    entry.multiObjectHarness = std::make_shared<MultiObjectHarness>();
+    const UserHarnessConfig cfg = buildUserMultiObjectConfig(entry, modelIndex);
+    CompileResult result;
+    wait.run([&]{ result = entry.multiObjectHarness->CompileUserPool(cfg); });
+    logMessage(qDecodeLog(result.log));
+    if (result.success) {
+        entry.multiObjectMapping.abiValidated = true;
+        entry.multiObjectMapping.validationMessage =
+            "用户多对象代码编译并加载成功";
+        m_lblMultiObjectAdapterStatus->setText(
+            QStringLiteral("状态: 多对象 Harness 已加载 — %1")
+                .arg(qUtf8(result.dllPath)));
+        logMessage(QStringLiteral("SUCCESS: 多对象 Harness 编译并加载成功"));
+    } else {
+        entry.multiObjectMapping.abiValidated = false;
+        entry.multiObjectHarness.reset();
+        m_lblMultiObjectAdapterStatus->setText(
+            QStringLiteral("状态: 编译失败，请检查 MoCreate/MoInit/MoStep/MoDestroy"));
+    }
+    updateWorkflowUi();
+}
+
+void MainWindow::runMultiObjectTest() {
+    saveMultiObjectEditor();
+    const int modelIndex = selectedTestModelIndex(m_comboMultiObjectModel);
+    if (modelIndex < 0) return;
+    FleetModelEntry& entry = m_models[static_cast<size_t>(modelIndex)];
+    if (!entry.multiObjectHarness || !entry.multiObjectHarness->IsLoaded()) {
+        compileMultiObjectAdapter();
+        if (!entry.multiObjectHarness || !entry.multiObjectHarness->IsLoaded()) return;
+    }
+    MultiObjectTestConfig config;
+    config.objectCount = entry.multiObjectCount;
+    config.stepCount = entry.multiObjectSteps;
+    config.stepDt = entry.multiObjectDt;
+    config.tolerance = entry.multiObjectTolerance;
+    config.schedule = entry.multiObjectSchedule;
+    config.randomSeed = 20260902u;
+    const RandomValueBlob values = entry.multiObjectHarness->Sample(
+        config.randomSeed, config.objectCount);
+    ScopedBusyOverlay wait(this, QStringLiteral("正在运行单线程多对象测试…"));
+    MultiObjectTestReport report;
+    MultiObjectHarness* harnessPtr = entry.multiObjectHarness.get();
+    wait.run([&]{
+        report = SingleThreadMultiObjectTester::Run(*harnessPtr, config, values);
+    });
+    entry.multiObjectReport = report;
+    updateMultiObjectResultView(entry.multiObjectReport);
+    logMessage(QStringLiteral("%1: 单线程多对象测试 — %2")
+        .arg(qUtf8(entry.multiObjectReport.verdict),
+             qUtf8(entry.multiObjectReport.summary)));
+
+    ModelMultiObjectReport named;
+    named.modelName = qToUtf8(entry.name);
+    named.configured = true;
+    named.harnessCompiled = true;
+    named.mappingProfile = entry.multiObjectMapping;
+    named.report = entry.multiObjectReport;
+    if (m_latestFleetReport.modelReports.empty()) {
+        m_showSingleItemReport = true;
+        m_latestReport.multiObjectConfigured = true;
+        m_latestReport.multiObjectReport = entry.multiObjectReport;
+    } else {
+        m_showSingleItemReport = false;
+    }
+    bool replaced = false;
+    for (auto& existing : m_latestFleetReport.multiObjectReports) {
+        if (existing.modelName == named.modelName) {
+            existing = named;
+            replaced = true;
+            break;
+        }
+    }
+    if (!replaced) m_latestFleetReport.multiObjectReports.push_back(named);
+    refreshReportBrowser();
+}
+
+void MainWindow::updateMultiObjectResultView(const MultiObjectTestReport& report) {
+    m_tblMultiObjectResults->setRowCount(0);
+    QVector<TrajectorySeries> series;
+    const QVector<QColor> colors = {
+        QColor("#2dd4bf"), QColor("#14b8a6"), QColor("#fbbf24"),
+        QColor("#a7f3d0"), QColor("#34d399"), QColor("#5eead4")
+    };
+    for (const auto& object : report.objectResults) {
+        const int row = m_tblMultiObjectResults->rowCount();
+        m_tblMultiObjectResults->insertRow(row);
+        m_tblMultiObjectResults->setItem(row, 0,
+            new QTableWidgetItem(QStringLiteral("Object #%1").arg(object.objectId)));
+        m_tblMultiObjectResults->setItem(row, 1,
+            new QTableWidgetItem(QString::number(object.baselineTrajectory.size())));
+        m_tblMultiObjectResults->setItem(row, 2,
+            new QTableWidgetItem(QString::number(object.interleavedTrajectory.size())));
+        m_tblMultiObjectResults->setItem(row, 3,
+            new QTableWidgetItem(QString::number(object.maxPositionDeviation, 'g', 10)));
+        m_tblMultiObjectResults->setItem(row, 4,
+            new QTableWidgetItem(QString::number(object.baselineReturnCode)));
+        m_tblMultiObjectResults->setItem(row, 5,
+            new QTableWidgetItem(QString::number(object.interleavedReturnCode)));
+        m_tblMultiObjectResults->setItem(row, 6,
+            new QTableWidgetItem(qUtf8(object.detail)));
+        const QColor color = colors[object.objectId % colors.size()];
+        TrajectorySeries baseline;
+        baseline.name = QStringLiteral("对象%1 基线").arg(object.objectId);
+        baseline.objectId = object.objectId;
+        baseline.baseline = true;
+        baseline.color = color;
+        for (const auto& point : object.baselineTrajectory)
+            baseline.points.push_back({ point.lat, point.lon });
+        TrajectorySeries interleaved = baseline;
+        interleaved.name = QStringLiteral("对象%1 交错").arg(object.objectId);
+        interleaved.baseline = false;
+        interleaved.points.clear();
+        for (const auto& point : object.interleavedTrajectory)
+            interleaved.points.push_back({ point.lat, point.lon });
+        series.push_back(baseline);
+        series.push_back(interleaved);
+    }
+    m_pMultiObjectTrajectory->setSeries(series);
+    if (report.verdict.empty()) {
+        m_lblMultiObjectResult->setText(QStringLiteral("测试结果: 未执行"));
+    } else {
+        m_lblMultiObjectResult->setText(
+            QStringLiteral("测试结果: %1 — %2 | 最大偏差=%3 | 最大单帧=%4 ms | 内存变化=%5 MB")
+                .arg(qUtf8(report.verdict), qUtf8(report.summary))
+                .arg(report.maxPositionDeviation, 0, 'g', 10)
+                .arg(report.maxFrameTimeMs, 0, 'f', 4)
+                .arg(report.memoryDeltaMB, 0, 'f', 2));
+    }
+}
+
+void MainWindow::onMultiObjectResultSelectionChanged() {
+    const int row = m_tblMultiObjectResults->currentRow();
+    m_pMultiObjectTrajectory->setHighlightedObject(row >= 0 ? row : -1);
+}
+
 void MainWindow::compileCurrentModel() {
     saveEditorsToCurrentModel();
     if (m_currentModelIndex < 0 || m_currentModelIndex >= static_cast<int>(m_models.size())) {
@@ -1650,10 +2717,12 @@ void MainWindow::compileCurrentModel() {
     entry.status = QStringLiteral("编译中…");
     refreshModelListUi();
 
-    CompileWaitIndicator wait(this, QString("正在编译型号「%1」…\n请稍候").arg(entry.name));
+    ScopedBusyOverlay wait(this, QString("正在编译型号「%1」…").arg(entry.name));
     UserHarnessConfig cfg = buildHarnessConfig(entry, m_currentModelIndex);
     entry.harness = std::make_shared<UserCodeHarness>();
-    CompileResult cr = entry.harness->Compile(cfg);
+    CompileResult cr;
+    UserCodeHarness* harnessPtr = entry.harness.get();
+    wait.run([&]{ cr = harnessPtr->Compile(cfg); });
     logMessage(qDecodeLog(cr.log));
     if (cr.success) {
         entry.status = QStringLiteral("已加载");
@@ -1675,7 +2744,7 @@ void MainWindow::compileAllModels() {
     }
 
     logMessage("INFO: 开始编译全部型号 Harness...");
-    CompileWaitIndicator wait(this, QString("正在编译全部型号 (0/%1)…").arg(m_models.size()));
+    ScopedBusyOverlay wait(this, QString("正在编译全部型号 (0/%1)…").arg(m_models.size()));
 
     int ok = 0;
     for (int i = 0; i < static_cast<int>(m_models.size()); ++i) {
@@ -1697,7 +2766,9 @@ void MainWindow::compileAllModels() {
         }
         UserHarnessConfig cfg = buildHarnessConfig(entry, i);
         entry.harness = std::make_shared<UserCodeHarness>();
-        CompileResult cr = entry.harness->Compile(cfg);
+        CompileResult cr;
+        UserCodeHarness* harnessPtr = entry.harness.get();
+        wait.run([&]{ cr = harnessPtr->Compile(cfg); });
         logMessage(QString("---- 型号「%1」编译日志 ----").arg(entry.name));
         logMessage(qDecodeLog(cr.log));
         if (cr.success) {
@@ -2027,11 +3098,22 @@ void MainWindow::runFullPrecheck() {
     logMessage("================================================================================");
     logMessage(QString("INFO: 启动全部型号一键预检（共 %1 个型号）...").arg(m_models.size()));
 
+    ScopedBusyOverlay wait(this, QStringLiteral("正在执行一键预检，请稍候…"));
+
+    const int perfSteps = m_spnSteps->value();
+    const double perfHz = m_comboHz->currentData().toDouble();
+    const int threadCount = m_spnThreadCount->value();
+    int passedModels = 0;
+
+    wait.run([&]{
     m_latestFleetReport = FleetSessionReport();
     m_latestFleetReport.timestamp = qToUtf8(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
 
-    int passedModels = 0;
     for (size_t i = 0; i < m_models.size(); ++i) {
+        setBusyOverlayText(QStringLiteral("一键预检：静态检查「%1」… (%2/%3)")
+            .arg(m_models[i].name)
+            .arg(static_cast<int>(i) + 1)
+            .arg(static_cast<int>(m_models.size())));
         DualBuildPrecheckReport one = precheckOneModel(m_models[i]);
         one.modelName = qToUtf8(m_models[i].name);
         if (one.overallPass) ++passedModels;
@@ -2064,13 +3146,14 @@ void MainWindow::runFullPrecheck() {
     double weightedTimeSum = 0.0;
     for (int modelIndex : compiledIndexes) {
         FleetModelEntry& model = m_models[static_cast<size_t>(modelIndex)];
+        setBusyOverlayText(QStringLiteral("一键预检：性能/轨迹「%1」…").arg(model.name));
         PerfProfileReport perf;
-        PerfProfilerWorker worker(model.harness.get(), m_spnSteps->value(),
-                                  m_comboHz->currentData().toDouble(),
+        PerfProfilerWorker worker(model.harness.get(), perfSteps, perfHz,
                                   static_cast<uint32_t>(modelIndex + 1));
-        connect(&worker, &PerfProfilerWorker::logMessage, this, &MainWindow::logMessage);
-        connect(&worker, &PerfProfilerWorker::finished, this,
-                [&perf](const PerfProfileReport& report) { perf = report; });
+        QObject::connect(&worker, &PerfProfilerWorker::logMessage,
+                         this, &MainWindow::logMessage, Qt::QueuedConnection);
+        QObject::connect(&worker, &PerfProfilerWorker::finished,
+                         [&perf](const PerfProfileReport& report) { perf = report; });
         worker.process();
 
         if (firstPerf) {
@@ -2126,6 +3209,7 @@ void MainWindow::runFullPrecheck() {
     }
 
     if (!compiledIndexes.empty()) {
+        setBusyOverlayText(QStringLiteral("一键预检：多型号/多线程并发测试…"));
         ConcurrencyTestConfig multiConfig;
         multiConfig.mode = ConcurrencyTestMode::MultiModel;
         for (int modelIndex : compiledIndexes) {
@@ -2146,7 +3230,7 @@ void MainWindow::runFullPrecheck() {
         for (int modelIndex : compiledIndexes) {
             ConcurrencyTestConfig threadConfig;
             threadConfig.mode = ConcurrencyTestMode::MultiThread;
-            threadConfig.count = m_spnThreadCount->value();
+            threadConfig.count = threadCount;
             ConcurrencyTestReport current =
                 ConcurrencyTester::Run(*m_models[static_cast<size_t>(modelIndex)].harness, threadConfig);
             threadTotal.workerCount += current.workerCount;
@@ -2168,6 +3252,51 @@ void MainWindow::runFullPrecheck() {
         m_latestFleetReport.multiThreadReport = threadTotal;
     }
 
+    for (int modelIndex = 0; modelIndex < static_cast<int>(m_models.size()); ++modelIndex) {
+        FleetModelEntry& model = m_models[static_cast<size_t>(modelIndex)];
+        setBusyOverlayText(QStringLiteral("一键预检：多对象测试「%1」…").arg(model.name));
+        ModelMultiObjectReport named;
+        named.modelName = qToUtf8(model.name);
+        if (!model.multiObjectMapping.mappingValidated
+            && QFileInfo::exists(multiObjectProfilePath(model))) {
+            std::string loadError;
+            InterfaceMappingProfile::LoadJson(
+                qToUtf8(multiObjectProfilePath(model)),
+                model.multiObjectMapping, loadError);
+        }
+        prepareMultiObjectHarness(model, modelIndex);
+        named.configured = isMultiObjectConfigured(model);
+        named.mappingProfile = model.multiObjectMapping;
+        named.harnessCompiled = model.multiObjectHarness
+            && model.multiObjectHarness->IsLoaded()
+            && model.multiObjectMapping.abiValidated;
+        if (named.harnessCompiled) {
+            MultiObjectTestConfig config;
+            config.objectCount = model.multiObjectCount;
+            config.stepCount = model.multiObjectSteps;
+            config.stepDt = model.multiObjectDt;
+            config.tolerance = model.multiObjectTolerance;
+            config.schedule = model.multiObjectSchedule;
+            config.randomSeed = static_cast<uint32_t>(20260902 + modelIndex);
+            named.report = SingleThreadMultiObjectTester::Run(
+                *model.multiObjectHarness, config,
+                model.multiObjectHarness->Sample(config.randomSeed, config.objectCount));
+            model.multiObjectReport = named.report;
+            logMessage(QStringLiteral("%1: 型号「%2」单线程多对象测试 — %3")
+                .arg(qUtf8(named.report.verdict), model.name,
+                     qUtf8(named.report.summary)));
+        } else {
+            if (named.report.summary.empty()) {
+                named.report.summary = !named.configured
+                    ? "未完成多对象代码配置"
+                    : "多对象 Harness 尚未编译或未通过验证";
+            }
+            logMessage(QStringLiteral("INFO: 型号「%1」%2")
+                .arg(model.name, qUtf8(named.report.summary)));
+        }
+        m_latestFleetReport.multiObjectReports.push_back(named);
+    }
+
     m_latestFleetReport.overallPass = (passedModels == static_cast<int>(m_models.size()));
     if (m_latestFleetReport.perfReport.realtimeVerdict == "FAIL"
         || m_latestFleetReport.multiModelReport.verdict == "FAIL"
@@ -2177,6 +3306,10 @@ void MainWindow::runFullPrecheck() {
                 != m_latestFleetReport.trajectoryModelsTested)
         || !m_latestFleetReport.crossModelHeaderConflictReport.overallPass) {
         m_latestFleetReport.overallPass = false;
+    }
+    for (const auto& named : m_latestFleetReport.multiObjectReports) {
+        if (named.configured && named.harnessCompiled && named.report.verdict == "FAIL")
+            m_latestFleetReport.overallPass = false;
     }
 
     // Aggregate badges across all models into m_latestDualReport counts/sizes
@@ -2211,6 +3344,13 @@ void MainWindow::runFullPrecheck() {
         m_latestReport.multiThreadReport = m_latestFleetReport.multiThreadReport;
         m_latestReport.perfReport = m_latestFleetReport.perfReport;
     }
+    if (!m_latestFleetReport.multiObjectReports.empty()) {
+        const auto& firstMultiObject = m_latestFleetReport.multiObjectReports.front();
+        m_latestReport.multiObjectConfigured = firstMultiObject.configured;
+        m_latestReport.multiObjectReport = firstMultiObject.report;
+    }
+    setBusyOverlayText(QStringLiteral("一键预检：正在刷新界面…"));
+    }); // wait.run — UI updates below stay on the GUI thread
 
     if (!m_latestFleetReport.perfReport.realtimeVerdict.empty()) {
         const auto& perf = m_latestFleetReport.perfReport;
@@ -2293,6 +3433,8 @@ void MainWindow::runStressTestOnly() {
     logMessage(QString("INFO: 启动型号「%1」UserMain 性能压测 (重复次数: %2, 目标频率: %3 Hz)...")
         .arg(entry->name).arg(runs).arg(targetHz));
 
+    showBusyOverlay(QStringLiteral("正在执行性能压测…"));
+
     if (m_pWorkerThread) {
         m_pWorkerThread->quit();
         m_pWorkerThread->wait();
@@ -2325,6 +3467,8 @@ void MainWindow::runTrajectoryPreview() {
     logMessage(QString("INFO: 试跑型号「%1」并采集 out_lat/out_lon 二维轨迹...")
         .arg(entry->name));
 
+    ScopedBusyOverlay wait(this, QStringLiteral("正在采集轨迹数据…"));
+
     if (!entry->harness->SetTrajectoryCapture(true)) {
         QMessageBox::warning(this, "警告",
             "当前 Harness 不支持轨迹采集。请重新「编译当前型号」后再试（需使用含 RecordTrajectoryPoint(out_lat, out_lon) 的新模板）。");
@@ -2335,8 +3479,12 @@ void MainWindow::runTrajectoryPreview() {
     int userRet = 0;
     bool seh = false;
     std::string err;
-    const bool ok = entry->harness->RunOnce(blob, &userRet, &seh, err);
-    entry->harness->SetTrajectoryCapture(false);
+    bool ok = false;
+    UserCodeHarness* harnessPtr = entry->harness.get();
+    wait.run([&]{
+        ok = harnessPtr->RunOnce(blob, &userRet, &seh, err);
+        harnessPtr->SetTrajectoryCapture(false);
+    });
 
     std::vector<TrajectorySample> samples;
     entry->harness->FetchTrajectory(samples);
@@ -2397,13 +3545,17 @@ void MainWindow::runTrajectoryPreview() {
     logMessage(QString("SUCCESS: 轨迹试跑完成，记录 %1 个经纬度点").arg(pts.size()));
 }
 
-void MainWindow::startConcurrencyWorker(UserCodeHarness* harness, const ConcurrencyTestConfig& cfg) {
+void MainWindow::startConcurrencyWorker(UserCodeHarness* harness,
+                                        const ConcurrencyTestConfig& cfg,
+                                        const QString& busyText) {
     if (m_pWorkerThread) {
         m_pWorkerThread->quit();
         m_pWorkerThread->wait();
         delete m_pWorkerThread;
         m_pWorkerThread = nullptr;
     }
+
+    showBusyOverlay(busyText.isEmpty() ? QStringLiteral("正在执行并发测试…") : busyText);
 
     m_pWorkerThread = new QThread();
     ConcurrencyTestWorker* worker = new ConcurrencyTestWorker(harness, cfg);
@@ -2450,7 +3602,7 @@ void MainWindow::runMultiModelTest() {
     for (const auto& s : cfg.models) total += s.count;
     logMessage(QString("INFO: 启动多型号并行 (型号 %1 种, 总实例 %2)...")
         .arg(cfg.models.size()).arg(total));
-    startConcurrencyWorker(nullptr, cfg);
+    startConcurrencyWorker(nullptr, cfg, QStringLiteral("正在执行多型号并行测试…"));
 }
 
 void MainWindow::runMultiThreadTest() {
@@ -2466,7 +3618,8 @@ void MainWindow::runMultiThreadTest() {
 
     logMessage(QString("INFO: 启动型号「%1」多线程测试 (线程数=%2)...")
         .arg(entry->name).arg(cfg.count));
-    startConcurrencyWorker(entry->harness.get(), cfg);
+    startConcurrencyWorker(entry->harness.get(), cfg,
+        QStringLiteral("正在执行多线程测试…"));
 }
 
 void MainWindow::onPerfProfileProgress(int step, int total, double timeMs, double memMB) {
@@ -2500,6 +3653,7 @@ void MainWindow::onPerfProfileFinished(const PerfProfileReport& report) {
     refreshReportBrowser();
     updateWorkflowUi();
 
+    hideBusyOverlay();
     logMessage("SUCCESS: UserMain 性能压测执行完毕！");
 }
 
@@ -2533,6 +3687,7 @@ void MainWindow::onConcurrencyFinished(const ConcurrencyTestReport& report) {
     refreshReportBrowser();
     updateWorkflowUi();
 
+    hideBusyOverlay();
     logMessage(QString("SUCCESS: %1 完成，判定=%2")
         .arg(isMultiModel ? "多型号并行" : "多线程测试")
         .arg(qUtf8(report.verdict)));

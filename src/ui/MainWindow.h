@@ -8,6 +8,7 @@
 #include <QTableWidget>
 #include <QTabWidget>
 #include <QSpinBox>
+#include <QDoubleSpinBox>
 #include <QComboBox>
 #include <QTextBrowser>
 #include <QListWidget>
@@ -15,6 +16,7 @@
 #include <QStringList>
 #include <memory>
 #include <vector>
+#include <functional>
 
 #include "../core/PeAnalyzer.h"
 #include "../core/HeaderAnalyzer.h"
@@ -23,6 +25,7 @@
 #include "../core/PerfProfiler.h"
 #include "../core/ConcurrencyTester.h"
 #include "../core/UserCodeHarness.h"
+#include "../core/MultiObjectHarness.h"
 #include "../core/ReportGenerator.h"
 #include "../core/PackageScanner.h"
 
@@ -31,6 +34,7 @@
 
 class ChartViewerWidget;
 class TrajectoryViewWidget;
+class BusyOverlayWidget;
 class QScrollArea;
 
 struct FleetModelEntry {
@@ -38,9 +42,24 @@ struct FleetModelEntry {
     QString packageDir;
     QStringList headerPaths;
     QString userMainBody;
+    QString userMultiObjectBody;
     std::vector<RandomVarDef> randomVars;
     int instanceCount = 1;
     std::shared_ptr<UserCodeHarness> harness;
+    QString multiObjectHeaderPath;
+    QString multiObjectDllPath;
+    QString multiObjectSourcePath;
+    QString multiObjectLibPath;
+    QString multiObjectAdapterCode;
+    int multiObjectCount = 3;
+    int multiObjectSteps = 100;
+    double multiObjectDt = 0.02;
+    double multiObjectTolerance = 1e-8;
+    MultiObjectSchedule multiObjectSchedule = MultiObjectSchedule::Forward;
+    std::shared_ptr<MultiObjectHarness> multiObjectHarness;
+    MultiObjectTestReport multiObjectReport;
+    InterfaceMappingProfile multiObjectMapping;
+    InterfaceHeaderSchema multiObjectSchema;
     QString status = QStringLiteral("未编译");
 };
 
@@ -50,12 +69,28 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow();
 
+    void showBusyOverlay(const QString& text);
+    void hideBusyOverlay();
+    void setBusyOverlayText(const QString& text);
+    void runBusyBlocking(const std::function<void()>& work);
+
 private slots:
     void runFullPrecheck();
     void runStressTestOnly();
     void runTrajectoryPreview();
     void runMultiModelTest();
     void runMultiThreadTest();
+    void onMultiObjectModelChanged(int index);
+    void browseMultiObjectDll();
+    void analyzeMultiObjectInterface();
+    void validateMultiObjectMapping();
+    void onMultiObjectFunctionChanged();
+    void browseMultiObjectHeader();
+    void browseMultiObjectSource();
+    void browseMultiObjectLib();
+    void compileMultiObjectAdapter();
+    void runMultiObjectTest();
+    void onMultiObjectResultSelectionChanged();
     void runDllFileCheckOnly();
     void runDllLoadCheckOnly();
     void runHeaderCheckOnly();
@@ -110,9 +145,22 @@ private:
     int selectedTestModelIndex(QComboBox* combo) const;
     FleetModelEntry* selectedTestModel(QComboBox* combo);
     bool requireSelectedModelCompiled(QComboBox* combo, int switchToTab);
-    void startConcurrencyWorker(UserCodeHarness* harness, const ConcurrencyTestConfig& cfg);
+    void startConcurrencyWorker(UserCodeHarness* harness, const ConcurrencyTestConfig& cfg,
+                                const QString& busyText = QString());
+    void refreshCodeEditorCompletions();
     const CombinedPrecheckReport* selectedPeDllReport() const;
     UserHarnessConfig buildHarnessConfig(const FleetModelEntry& entry, int index) const;
+    UserHarnessConfig buildUserMultiObjectConfig(const FleetModelEntry& entry, int index) const;
+    MultiObjectHarnessConfig buildMultiObjectHarnessConfig(
+        const FleetModelEntry& entry, int index) const;
+    void saveMultiObjectEditor();
+    void loadMultiObjectEditor(int modelIndex);
+    void updateMultiObjectResultView(const MultiObjectTestReport& report);
+    bool isMultiObjectConfigured(const FleetModelEntry& entry) const;
+    bool prepareMultiObjectHarness(FleetModelEntry& entry, int modelIndex);
+    void rebuildMultiObjectMappingTables();
+    void saveMultiObjectMappingFromUi();
+    QString multiObjectProfilePath(const FleetModelEntry& entry) const;
     DualBuildPrecheckReport precheckOneModel(const FleetModelEntry& entry);
     CombinedPrecheckReport runBuildPrecheck(const std::string& dllPath, const std::string& headerPath,
                                             const std::string& libPath, const std::string& buildConfig,
@@ -216,7 +264,40 @@ private:
     QLabel* m_lblMultiThreadSummary;
     QTableWidget* m_tblMultiThreadResults;
 
-    // Tab5 report
+    // Single-thread interleaved multi-object
+    QComboBox* m_comboMultiObjectModel;
+    QLabel* m_lblMultiObjectPageHint;
+    CppCodeEditor* m_editUserMultiObject;
+    QWidget* m_multiObjectLegacyPanel;
+    QLineEdit* m_editMultiObjectDll;
+    QComboBox* m_comboMultiObjectHeader;
+    QComboBox* m_comboMultiObjectLib;
+    QComboBox* m_comboMultiObjectCreate;
+    QComboBox* m_comboMultiObjectInit;
+    QComboBox* m_comboMultiObjectStep;
+    QComboBox* m_comboMultiObjectDestroy;
+    QTableWidget* m_tblMultiObjectParameters;
+    QTableWidget* m_tblMultiObjectFields;
+    QPushButton* m_btnAnalyzeMultiObject;
+    QPushButton* m_btnValidateMultiObject;
+    QLineEdit* m_editMultiObjectHeader;
+    QLineEdit* m_editMultiObjectSource;
+    QLineEdit* m_editMultiObjectLib;
+    CppCodeEditor* m_editMultiObjectAdapter;
+    QSpinBox* m_spnMultiObjectCount;
+    QSpinBox* m_spnMultiObjectSteps;
+    QDoubleSpinBox* m_spnMultiObjectDt;
+    QDoubleSpinBox* m_spnMultiObjectTolerance;
+    QComboBox* m_comboMultiObjectSchedule;
+    QPushButton* m_btnCompileMultiObject;
+    QPushButton* m_btnRunMultiObject;
+    QLabel* m_lblMultiObjectAdapterStatus;
+    QLabel* m_lblMultiObjectResult;
+    QTableWidget* m_tblMultiObjectResults;
+    TrajectoryViewWidget* m_pMultiObjectTrajectory;
+    int m_loadedMultiObjectModelIndex = -1;
+
+    // Report
     QTextBrowser* m_pReportBrowser;
     LogConsoleWidget* m_pLogConsole;
 
@@ -230,6 +311,7 @@ private:
     FleetSessionReport m_latestFleetReport;
     DualBuildPrecheckReport m_latestDualReport; // aggregate badges / last single
     QThread* m_pWorkerThread = nullptr;
+    BusyOverlayWidget* m_busyOverlay = nullptr;
 };
 
 #endif // MAIN_WINDOW_H

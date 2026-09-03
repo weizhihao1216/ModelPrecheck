@@ -25,7 +25,7 @@ ChartViewerWidget::ChartViewerWidget(QWidget* parent)
 
     m_pTimeSeries = new QLineSeries();
     m_pTimeSeries->setName("单步耗时 (ms)");
-    QPen penTime(QColor("#0066cc"));
+    QPen penTime(QColor("#0d9488"));
     penTime.setWidth(2);
     m_pTimeSeries->setPen(penTime);
 

@@ -1,16 +1,61 @@
 # 第三方武器模型 DLL 集成预检工具 (Model Validator)
 
+本工具面向仿真引擎（如 XSIM）集成前的第三方武器模型 C++ 动态库（DLL）预检，对模型包做静态检查、受控加载、UserMain / 多对象脚本编译运行，以及性能、并发、轨迹与报告输出。
+
+---
+
+## 0. 模型集成问题对照（来源：集成问题表）
+
+下表对应历史「模型集成问题」清单。工具侧能力以**能否发现 / 隔离 / 复现 / 报告**为主；厂家缺库、隐含依赖等根因仍需模型侧整改。
+
+### 0.1 已解决（工具可检测或已提供对策）
+
+| 类型 | 现象 | 场景 / 原因 | 工具操作流程 | 功能实现 | 实现方式 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 静态（构建/链接配置） | 编译 Debug 报错、Release 成功 | 厂家常忽略或不提供 Debug 链接库 | 添加型号 → 选模型包 → **一键预检**；在「DLL 文件与依赖检查 / LIB 检查」看 Debug·Release 包与 CRT | 扫描包内 Debug/Release 产物；识别 MD/MT CRT；报告标明构建配置 | `PackageScanner` 递归找 `.dll/.lib`；`PeAnalyzer` 判架构/CRT；`LibAnalyzer` 查导入库；`MainWindow::precheckOneModel` 分配置汇总 |
+| 静态+动态（头文件/符号冲突） | 同厂家多模型集成后偶发崩溃 | 头文件结构体重名、无命名空间隔离，合进同一模型库易崩 | 多型号都加进列表并勾选头文件 → **一键预检** → 看头文件冲突表 / 报告「跨型号头文件冲突」 | 同包及跨型号头文件集合冲突分析；导出声明与 PE 导出交叉比对 | `HeaderAnalyzer::AnalyzeHeaderSet` / `VerifyConsistency`；报告写入 `ReportGenerator` Fleet 章节 |
+| 动态（多线程安全） | XSIM 勾选多线程后崩溃 | 模型未做线程安全 | 编译型号 →「多线程稳定性」选型号与线程数 → **执行多线程测试**；或一键预检中自动跑 | 多线程各跑独立 UserMain；记录成功/失败/SEH；PASS/WARN/FAIL | `ConcurrencyTester::Run`（MultiThread）；样例 `CompatibleWeaponC/D/E` 用 `thread_local` 作对照 PASS |
+| 动态（多实例/状态隔离） | 同一武器发射多枚崩溃 | 不支持多实例或集成越界 | 「单线程多对象测试」写 `MoCreate/Init/Step/Destroy` → 编译 Harness → **执行基线与交错测试**；或「多型号并行」设实例数 | 逐对象基线 vs 单线程交错推进；偏差、返回码、SEH 与多轨迹对比 | `MultiObjectHarness` + `SingleThreadMultiObjectTester`；`ConcurrencyTester` 多型号并行；样例 `MultiInstanceWeapon` / `ConflictWeapon*` |
+| 动态（模型间干扰/内存破坏） | 同厂家不同模型同场景冲突、数据异常 | 共享全局/单例环境参数，或越界写坏公共数据 | 多型号同时添加 → 全部编译 → **多型号并行**；对照 Conflict vs Compatible 样例 | 多路径 Harness 同进程并发；报告串扰/崩溃；轨迹/日志辅助定位 | `ConcurrencyTester::RunMultiModel`；样例 `ConflictWeaponA/B`（易 FAIL）与 `CompatibleWeaponC/D/E`（宜 PASS） |
+
+### 0.2 部分解决（可检测风险，尚无完整专项用例或无法根治）
+
+| 类型 | 现象 | 场景 / 原因 | 工具操作流程 | 功能实现 | 实现方式 | 仍缺什么 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| 动态（CRT/ABI与跨模块内存） | 初始化路径参数带 `c_str()` 读不到路径 | 双方 CRT 不匹配、堆隔离 | 一键预检 / PE 页查看 **CRT MD/MT**；UserMain 在本工具侧统一用 MSVC 编译 Harness | 报告 CRT 类型；加载失败写入日志 | `PeAnalyzer` CRT 识别；`DllLoader` + SEH；`UserCodeHarness` 本机 `cl` 编 Harness | 不能自动改写厂家 DLL 的 CRT；跨堆传 `std::string` 仍需厂家/引擎约定 |
+| 动态（倍速调度/数值稳定性） | 同一枚弹加速到约 50 倍速崩溃 | 固定步长/调用频率，高倍速导致发散或越界 | 「性能压测」设次数与目标 Hz → 看耗时/抖动/实时性判定 | 相对帧预算给出 PASS/WARN/FAIL；曲线展示 | `PerfProfiler` + `ChartViewerWidget` | 尚无「N 倍速想定」专项（故意放大 `dt` / 单帧多次 Step） |
+| 环境兼容（依赖/ABI/版本） | 不同电脑 / XSIM5·6 表现不一 | 版本、依赖 DLL、VC 运行库、授权路径、ABI 不一致 | PE 页看导入依赖与架构；授权放 DLL 同级（或 exe 旁备份）；一键预检看缺失依赖 | 缺失 DLL、架构、导出扫描；授权目录提示 | `PeAnalyzer` Import；`LOAD_WITH_ALTERED_SEARCH_PATH`；UI 授权提示 | 无法覆盖全部 XSIM 主程序 ABI 差异与授权加密逻辑 |
+| 架构与集成设计（隐含依赖） | 模型从原系统拆出，集成繁琐、用例冗杂 | 仍依赖原系统全局状态、初始化顺序、资源 | 用 **UserMain / Mo\*** 自行编排调用；改名接口可用映射样例；报告标 N/A 未测项 | 用户脚本驱动生命周期；标准 Handle 自动识别；HTML 矩阵 | `UserCodeHarness`、`MultiObjectHarness`、`InterfaceMappingProfile`、`ReportGenerator` | 无法消除厂家未文档化的隐含依赖，需厂家提供独立 API |
+
+### 0.3 问题类型索引
+
+| 问题类型 | 已解决 | 部分解决 |
+| :--- | :--- | :--- |
+| 静态（构建/链接） | Debug 库缺失的**检测** | — |
+| 静态+动态（头文件/符号） | 跨型号头文件冲突检测 | — |
+| 动态（多线程） | 多线程 UserMain 稳定性测试 | — |
+| 动态（多实例/隔离） | 单线程多对象 + 多型号并行 | — |
+| 动态（模型间干扰） | 同进程多型号并发复现 | — |
+| 动态（CRT/ABI） | — | CRT 识别与加载失败日志 |
+| 动态（倍速/数值） | — | 帧预算压测，无专用倍速用例 |
+| 环境兼容 | — | 依赖/架构扫描 + 授权提示 |
+| 架构与集成设计 | — | UserMain/Mo\* 灵活编排，根因在厂家 |
+
+---
+
 ## 1. 项目概述
 
-本工具面向仿真引擎集成前的第三方武器模型 C++ 动态库（DLL）预检，提供桌面端一站式能力：
+桌面端一站式能力：
 
 - 模型包静态检查（头文件 / LIB / PE 依赖与导出）
 - 受控动态加载与 SEH 硬件异常隔离
-- 可编译的用户脚本 `UserMain`（驱动 Init / Step / Destroy）
+- 可编译用户脚本 `UserMain`（驱动 Init / Step / Destroy）与 `Mo*` 多对象 Harness
 - UserMain 性能压测、内存增长监测与实时性判定
 - 多型号并行 / 单型号多线程稳定性测试
-- 二维经纬度轨迹试跑与路径点表
-- HTML 预检报告（综合判定矩阵 + 按型号明细）
+- 单线程多对象基线/交错推进与状态串扰检测
+- 二维经纬度轨迹试跑（UserMain：`RecordTrajectoryPoint`；多对象：`MoStep` 的 `out_lat/out_lon`）
+- HTML 预检报告（综合判定矩阵 + 按型号明细；未测项 N/A）
+- 代码编辑器：QScintilla（语法高亮、补全、Ctrl+滚轮缩放）
 
 ---
 
@@ -19,9 +64,10 @@
 | 项 | 说明 |
 | :--- | :--- |
 | 编译器 | MSVC（推荐 VS2017+ / VS2022），`/utf-8`，`NOMINMAX` |
-| UI | Qt 5.x Widgets + Qt Charts（优先 `QTDIR`，其次本机 Qt 5.14.2 / 5.11 路径） |
+| UI | Qt 5.x Widgets + Qt Charts + **QScintilla 2.14.1（静态链入）** |
 | 构建 | CMake 3.12+；一键脚本 `build.bat`（默认 VS2022 x64） |
-| 系统 API | Win32 PE 解析、`LoadLibraryExW`、SEH（`__try/__except`）、`psapi` 内存统计 |
+| 系统 API | Win32 PE、`LoadLibraryExW`、SEH、`psapi` |
+| QScintilla | 见 `third_party/README_QScintilla.md`（GPL-3 / 商业双许可） |
 
 ---
 
@@ -40,98 +86,66 @@ cmake --build build --config Release --target ModelValidator
 
 可执行文件：`build\Release\ModelValidator.exe`（或 `dist\ModelValidator.exe`）。
 
-样例模型 DLL 一般在：
+若缺少 QScintilla 静态库，先执行：
 
-```text
-build\sample_models\<型号名>\Release\
+```bat
+third_party\build_qscintilla.bat
 ```
 
-例如 `CompatibleWeaponE`：
-
-```text
-build\sample_models\CompatibleWeaponE\Release\
-  CompatibleWeaponE.dll
-  WeaponModel.h
-```
+样例 DLL 一般在：`build\sample_models\<型号名>\Release\`。
 
 ### 3.2 准备第三方模型包
-
-每个「型号」对应一个模型包目录，建议结构：
 
 ```text
 YourModelPackage\
   WeaponModel.h          # 或厂商头文件
-  YourModel.dll          # 武器模型 DLL
+  YourModel.dll
   （可选）.lib / 授权文件或授权文件夹
 ```
 
-**授权文件放置：**
-
-> 授权文件或文件夹请放在第三方模型 dll 同级目录；如不可用可复制一份放在本 exe 同级目录下。
-
-加载使用 `LOAD_WITH_ALTERED_SEARCH_PATH`，优先从 DLL 所在目录解析依赖。
+**授权文件：** 放在第三方模型 DLL 同级目录；不可用时可复制一份到本 exe 同级目录。加载使用 `LOAD_WITH_ALTERED_SEARCH_PATH`。
 
 ### 3.3 基本操作流程
 
-1. **添加型号**  
-   左侧「型号与 UserMain」→「添加型号」→ 填写名称 →「浏览」选择模型包根目录。
-
-2. **勾选头文件**  
-   「刷新列表」后勾选要参与编译的 `.h`（可多选）。
-
-3. **编写 / 确认 UserMain**  
-   默认模板完成 `Model_Init` → 循环 `Model_Step` → `Model_Destroy`。  
-   每步用 `out_lat` / `out_lon` 接收经纬度，并调用：
-
-   ```cpp
-   RecordTrajectoryPoint(out_lat, out_lon);
-   ```
-
-   供「试跑并绘制轨迹」采集二维轨迹。
-
+1. **添加型号** → 填名称 → 浏览模型包根目录  
+2. **勾选头文件** →「刷新列表」后勾选参与编译的 `.h`  
+3. **编写 UserMain**（默认 `Model_Init` → 循环 `Model_Step` → `Model_Destroy`）  
+   - 轨迹试跑需：`out_lat` / `out_lon` + `RecordTrajectoryPoint(out_lat, out_lon)`  
 4. **配置随机变量 `R.*`**  
-   如 `lat` / `lon` / `alt` / `speed` 等，压测与试跑时按范围随机采样。
-
-5. **编译型号**  
-   「编译当前型号」或「编译全部型号」。  
-   生成物在 exe 旁：`TestModel\<型号名>\<型号名>.dll`（Harness，不是厂商 DLL）。
-
-6. **一键预检全部型号**  
-   扫描各型号包内头文件 / LIB / DLL，做静态 PE、导出、动态加载检查，并刷新「预检报告」。
-
-7. **按需专项测试**（需先编译成功）  
-   - **性能压测**：选型号 → 次数与 Hz →「执行性能压测」  
-   - **二维轨迹**：选型号 →「试跑并绘制轨迹」（左图 + 右侧经纬度表）  
-   - **多型号并行**：各型号设实例数 →「并行测试（一起跑）」  
-   - **多线程**：选型号与线程数 →「执行多线程测试」
-
-8. **查看 / 导出报告**  
-   「预检报告」页查看 HTML；「导出预检报告」保存。  
-   多型号会话报告含：综合判定矩阵、型号总览、按型号 PE、压测/并行明细与日志。未执行项显示 **N/A**。
+5. **编译当前/全部型号** → 生成 `TestModel\<型号名>\<型号名>.dll`（Harness）  
+6. **一键预检全部型号** → 静态 PE / 头文件 / LIB / 加载 + 已编译项的压测/并发等  
+7. **专项测试**（需已编译，除非说明）  
+   - 性能压测 / 二维轨迹试跑  
+   - 多型号并行 / 多线程  
+   - 单线程多对象：写 `MoCreate/MoInit/MoStep/MoDestroy`（`MoStep` 输出 `out_lat/out_lon`）→ 编译 → 基线与交错测试  
+8. **预检报告**查看 / 导出 HTML  
 
 ### 3.4 界面分区一览
 
 | 区域 | 作用 |
 | :--- | :--- |
-| 预检控制 | 一键预检全部型号、导出报告 |
+| 预检控制 | 一键预检、导出报告 |
 | 状态 Badges | 头文件 / LIB / DLL 通过情况 |
-| 左侧型号面板 | 型号列表、包路径、头文件、UserMain、随机变量、编译 |
-| 静态 PE 分析 | 按型号/DLL 查看架构、CRT、导入依赖、导出符号 |
-| 性能压测 | 耗时/内存曲线；二维 Lon×Lat 轨迹与路径点表 |
-| 多型号并行 | 各型号实例数与并行结果 |
-| 多线程测试 | 同型号多线程 UserMain 结果 |
-| 预检报告 | 内嵌 HTML 总报告 |
-| 底部日志 | 运行过程日志 |
+| 左侧型号面板 | 型号、包路径、头文件、UserMain（QScintilla）、随机变量、编译 |
+| 静态检查页 | 头文件 / LIB / PE / 加载 |
+| 性能 / 轨迹 | 压测曲线；UserMain 二维 Lon×Lat |
+| 多型号并行 | 实例数与并行结果 |
+| 多线程测试 | 同型号多线程 UserMain |
+| 单线程多对象 | Mo\* 编辑、基线/交错、多轨迹（MoStep 经纬度） |
+| 预检报告 | HTML 总报告 |
+| 底部日志 | 过程日志 |
 
 ### 3.5 样例模型说明
 
 | 样例 | 用途 |
 | :--- | :--- |
-| `StandardWeapon` | 标准合规样本 |
-| `FaultyWeapon` | 故意故障样本 |
-| `MultiInstanceWeapon` | 多实例 API 样本 |
-| `ConflictWeaponA/B` | 共享内核对象冲突；同跑多型号易 FAIL |
-| `CompatibleWeaponC/D/E` | `thread_local`，多线程/多型号宜 PASS；E 经纬度扰动更大，便于轨迹预览 |
+| `StandardWeapon` | 标准合规（偏单例） |
+| `FaultyWeapon` | 故意故障 |
+| `MultiInstanceWeapon` | Handle 多实例 + 多对象示例 |
+| `ConflictWeaponA/B` | 共享内核冲突，多型号易 FAIL |
+| `CompatibleWeaponC/D/E` | `thread_local`，多线程/多型号宜 PASS |
+| `PrecheckDemoWeapon` | 统一演示 Handle API |
+| `RenamedInterfaceWeapon` | 改名接口 / 映射样例 |
 
 ---
 
@@ -140,29 +154,30 @@ YourModelPackage\
 | 能力 | 说明 | 主要实现 |
 | :--- | :--- | :--- |
 | 模型包扫描 | 递归发现 `.h` / `.lib` / `.dll` | `PackageScanner` |
-| 头文件规范 | 编码、`extern "C"`、接口原型等 | `HeaderAnalyzer` |
-| LIB 检查 | COFF 架构、导入库类型 | `LibAnalyzer` |
-| PE 静态分析 | x86/x64、CRT MD/MT、Import/Export | `PeAnalyzer` |
-| 动态加载 + SEH | `LoadLibraryExW`、符号绑定、硬件异常隔离 | `DllLoader`、`SehHelper` |
-| UserMain 编译运行 | 生成 Harness 源码、`cl.exe` 编译、采样与 `RunOnce` | `UserCodeHarness` |
-| 轨迹采集 | `RecordTrajectoryPoint` / `SetTrajectoryCapture` / `GetTrajectoryPoint` | `UserCodeHarness` 生成代码 |
-| 性能压测 | 重复 UserMain：耗时、抖动、Working Set、帧预算判定 | `PerfProfiler`、`ChartViewerWidget` |
-| 二维轨迹 UI | Lon×Lat 折线 + 路径点表 | `TrajectoryViewWidget`、`MainWindow` |
-| 多型号并行 | 多路径 Harness 按实例数并发跑 UserMain | `ConcurrencyTester` |
-| 多线程稳定性 | 单型号多线程各跑一次 UserMain | `ConcurrencyTester` |
-| 轨迹逻辑校验 | NaN/边界/单位等（引擎侧能力） | `FunctionalVerifier` |
-| HTML 报告 | 单报告 / 双构建 / 多型号 Fleet；矩阵 + PE + 压测/并行 + 日志 | `ReportGenerator` |
-| 主界面编排 | 型号管理、一键预检、各 Tab 联调 | `MainWindow` |
+| 头文件规范与冲突 | 编码、`extern "C"`、跨型号冲突 | `HeaderAnalyzer` |
+| LIB / PE | 架构、CRT、Import/Export | `LibAnalyzer`、`PeAnalyzer` |
+| 动态加载 + SEH | 安全加载、硬件异常隔离 | `DllLoader`、`SehHelper` |
+| UserMain 编译运行 | Harness 生成、`cl` 编译、`RunOnce` | `UserCodeHarness` |
+| 轨迹采集 | UserMain：`RecordTrajectoryPoint`；多对象：`MoStep` 的 `out_lat/out_lon` | `UserCodeHarness`、`MultiObjectHarness` |
+| 性能压测 | 耗时、抖动、Working Set、帧预算 | `PerfProfiler`、`ChartViewerWidget` |
+| 二维轨迹 UI | Lon×Lat 折线 + 点表 | `TrajectoryViewWidget` |
+| 多型号 / 多线程 | 并发 UserMain | `ConcurrencyTester` |
+| 单线程多对象 | 基线/交错、串扰与 SEH | `MultiObjectHarness`、`SingleThreadMultiObjectTester` |
+| 接口映射 | 改名接口 JSON 映射（legacy/样例） | `InterfaceMappingProfile` |
+| HTML 报告 | 单报告 / Fleet 矩阵 | `ReportGenerator` |
+| 代码编辑器 | 高亮、补全、缩放、可拖拽高度 | `CppCodeEditor`（QScintilla） |
+| 等候动画 | 编译/预检/测试非阻塞转圈 | `BusyOverlayWidget` |
+| 主界面编排 | 型号管理、导航、一键预检 | `MainWindow` |
 
-需求编号对照（历史 F1–F13 仍适用，实现已演进为「多型号 + UserMain」工作流）：
+需求编号对照（历史 F1–F13）：
 
 | 编号 | 功能 | 现状 |
 | :--- | :--- | :--- |
-| F1–F3 | 依赖扫描、架构/CRT、导出校验 | 一键预检 +「静态 PE 分析」按型号查看 |
-| F4–F6 | 安全加载、符号绑定、加载内存开销 | 一键预检阶段对包内 DLL 执行 |
-| F7–F9 | 耗时/内存/实时性 | 「性能压测」对已编译 UserMain 连跑 |
-| F10–F11 | 参数与曲线 | 随机变量表 + Charts；轨迹为二维经纬度 |
-| F12 | 坐标一致性 | `FunctionalVerifier`（UserMain 自行驱动时以试跑采集为主） |
+| F1–F3 | 依赖扫描、架构/CRT、导出 | 一键预检 + PE 页 |
+| F4–F6 | 安全加载、符号、加载内存 | 一键预检对包内 DLL |
+| F7–F9 | 耗时/内存/实时性 | 性能压测 |
+| F10–F11 | 参数与曲线 | 随机变量 + Charts；二维轨迹 |
+| F12 | 坐标一致性 | `FunctionalVerifier` + 试跑采集 |
 | F13 | 报告导出 | 预检报告页 + 导出 HTML |
 
 ---
@@ -175,35 +190,13 @@ ModelPrecheck/
 ├── AGENTS.md
 ├── build.bat
 ├── CMakeLists.txt
+├── third_party/                 # QScintilla 源码与静态库安装
 ├── src/
-│   ├── main.cpp
-│   ├── core/
-│   │   ├── PeAnalyzer.*
-│   │   ├── HeaderAnalyzer.*
-│   │   ├── LibAnalyzer.*
-│   │   ├── PackageScanner.*
-│   │   ├── DllLoader.*
-│   │   ├── UserCodeHarness.*      # UserMain 编译 / 轨迹采集 API
-│   │   ├── PerfProfiler.*
-│   │   ├── ConcurrencyTester.*    # 多型号 / 多线程
-│   │   ├── FunctionalVerifier.*
-│   │   └── ReportGenerator.*
-│   ├── utils/
-│   │   ├── SehHelper.*
-│   │   ├── MemoryUtils.*
-│   │   └── QtEncoding.h
-│   └── ui/
-│       ├── MainWindow.*
-│       ├── ChartViewerWidget.*
-│       ├── TrajectoryViewWidget.* # 二维 Lon×Lat 轨迹
-│       ├── LogConsoleWidget.*
-│       └── themestyle.qss
-└── sample_models/
-    ├── StandardWeapon/
-    ├── FaultyWeapon/
-    ├── MultiInstanceWeapon/
-    ├── ConflictWeaponA/ B/
-    └── CompatibleWeaponC/ D/ E/
+│   ├── core/                    # Pe/Header/Lib/Package、Harness、Tester、Report
+│   ├── utils/                   # SehHelper、MemoryUtils
+│   └── ui/                      # MainWindow、Charts、Trajectory、CppCodeEditor…
+├── sample_models/
+└── docs/                        # 主题预览等
 ```
 
 ---
@@ -212,20 +205,21 @@ ModelPrecheck/
 
 ### 6.1 扩展模型接口结构体
 
-修改 `src/utils/SehHelper.h` 中 `WeaponModelParams` / `WeaponModelOutput` 及函数指针；同步样例头文件与 `DllLoader` 调用约定。
+修改 `src/utils/SehHelper.h` 中参数/输出结构及函数指针；同步样例头文件与调用约定。
 
-### 6.2 扩展 UserMain / 轨迹
+### 6.2 扩展 UserMain / 多对象 / 轨迹
 
-- 默认模板：`UserCodeHarness::DefaultUserMainTemplate()`
-- 轨迹导出符号由 `GenerateSource` 注入；改签名后需重新「编译型号」
+- UserMain 模板：`UserCodeHarness::DefaultUserMainTemplate()`
+- 多对象：`MultiObjectHarness` 的 `MoCreate/MoInit/MoStep/MoDestroy`
+- 改签名后需重新编译对应 Harness
 
 ### 6.3 扩展校验与报告
 
-- 物理/坐标规则：`FunctionalVerifier::VerifyTrajectory`
-- 报告章节：`ReportGenerator::GenerateHtml` / `GenerateFleetHtml`
+- `FunctionalVerifier::VerifyTrajectory`
+- `ReportGenerator::GenerateHtml` / `GenerateFleetHtml`
 
 ### 6.4 强制约束（见 AGENTS.md）
 
-1. 包含 `<windows.h>` 前定义 `NOMINMAX`
-2. 对 DLL 调用使用 SEH 包装（`SehHelper`）
-3. 勿在头文件中引入 `QT_CHARTS_USE_NAMESPACE`；Charts 仅放 `.cpp`
+1. 包含 `<windows.h>` 前定义 `NOMINMAX`  
+2. DLL 调用经 SEH（`SehHelper`）  
+3. 勿在头文件引入 `QT_CHARTS_USE_NAMESPACE`；Charts 仅放 `.cpp`

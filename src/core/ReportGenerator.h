@@ -10,6 +10,16 @@
 #include "FunctionalVerifier.h"
 #include "ConcurrencyTester.h"
 #include "PackageScanner.h"
+#include "SingleThreadMultiObjectTester.h"
+#include "InterfaceMappingProfile.h"
+
+struct ModelMultiObjectReport {
+    std::string modelName;
+    bool configured = false;
+    bool harnessCompiled = false;
+    InterfaceMappingProfile mappingProfile;
+    MultiObjectTestReport report;
+};
 
 struct CombinedPrecheckReport {
     std::string dllPath;
@@ -28,6 +38,8 @@ struct CombinedPrecheckReport {
     TrajectoryVerificationReport trajReport;
     ConcurrencyTestReport multiModelReport;
     ConcurrencyTestReport multiThreadReport;
+    MultiObjectTestReport multiObjectReport;
+    bool multiObjectConfigured = false;
 
     bool overallPass = false;
 };
@@ -62,6 +74,7 @@ struct FleetSessionReport {
     PerfProfileReport perfReport;
     int trajectoryModelsTested = 0;
     int trajectoryModelsPassed = 0;
+    std::vector<ModelMultiObjectReport> multiObjectReports;
     bool overallPass = false;
 };
 

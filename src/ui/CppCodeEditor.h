@@ -1,28 +1,39 @@
 #ifndef CPP_CODE_EDITOR_H
 #define CPP_CODE_EDITOR_H
 
-#include <QPlainTextEdit>
+#include <QStringList>
+#include <Qsci/qsciscintilla.h>
 
-class CppSyntaxHighlighter;
-class QKeyEvent;
+class QsciLexerCPP;
+class QsciAPIs;
+class QWheelEvent;
 
-class CppCodeEditor : public QPlainTextEdit {
+/** C++ code editor backed by QScintilla. */
+class CppCodeEditor : public QsciScintilla {
     Q_OBJECT
 public:
     explicit CppCodeEditor(QWidget* parent = nullptr);
+    ~CppCodeEditor() override;
+
+    void setCompletionSymbols(const QStringList& symbols);
+    void refreshCompletionsFromHeaders(const QStringList& headerPaths);
+
+    // Compatibility helpers used by MainWindow (QPlainTextEdit-like API).
+    QString toPlainText() const;
+    void setPlainText(const QString& text);
+    void clear();
 
 protected:
-    void keyPressEvent(QKeyEvent* event) override;
-
-private slots:
-    void highlightCurrentLine();
+    void wheelEvent(QWheelEvent* event) override;
 
 private:
-    QString currentIndent() const;
-    void indentSelection(bool removeIndent);
+    void applyDarkTheme();
+    void applyFont();
+    void rebuildApis(const QStringList& symbols);
 
-    CppSyntaxHighlighter* m_highlighter;
-    const QString m_indentUnit = QStringLiteral("    ");
+    QsciLexerCPP* m_lexer = nullptr;
+    QsciAPIs* m_apis = nullptr;
+    QStringList m_completionSymbols;
 };
 
 #endif // CPP_CODE_EDITOR_H
