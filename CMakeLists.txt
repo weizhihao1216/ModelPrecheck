@@ -122,18 +122,9 @@ target_link_libraries(ModelValidator PRIVATE
 )
 
 # Add sample DLL targets for test verification
-add_subdirectory(sample_models/StandardWeapon)
-add_subdirectory(sample_models/FaultyWeapon)
-add_subdirectory(sample_models/MultiInstanceWeapon)
-add_subdirectory(sample_models/ConflictWeaponA)
-add_subdirectory(sample_models/ConflictWeaponB)
-add_subdirectory(sample_models/CompatibleWeaponC)
-add_subdirectory(sample_models/CompatibleWeaponD)
-add_subdirectory(sample_models/CompatibleWeaponE)
 add_subdirectory(sample_models/CompatibleWeaponF)
 add_subdirectory(sample_models/CompatibleWeaponG)
-add_subdirectory(sample_models/RenamedInterfaceWeapon)
-add_subdirectory(sample_models/PrecheckDemoWeapon)
+add_subdirectory(sample_models/testcase_kit)
 
 # Explicit smoke target for the generated multi-object adapter DLL and scheduler.
 add_executable(MultiObjectHarnessSmoke EXCLUDE_FROM_ALL
@@ -156,52 +147,7 @@ endif()
 
 install(TARGETS ModelValidator DESTINATION .)
 
-# Each sample model package uses fixed layout: include/ + lib/ + models/
-set(_SAMPLE_MODELS
-    StandardWeapon
-    FaultyWeapon
-    MultiInstanceWeapon
-    RenamedInterfaceWeapon
-    ConflictWeaponA
-    ConflictWeaponB
-    CompatibleWeaponC
-    CompatibleWeaponD
-    CompatibleWeaponE
-)
-foreach(_model IN LISTS _SAMPLE_MODELS)
-    install(TARGETS ${_model}
-            RUNTIME DESTINATION sample_models/${_model}/models
-            ARCHIVE DESTINATION sample_models/${_model}/lib
-            LIBRARY DESTINATION sample_models/${_model}/models)
-endforeach()
-
-install(TARGETS PrecheckDemoWeapon
-        RUNTIME DESTINATION sample_models/PrecheckDemoWeapon/models
-        ARCHIVE DESTINATION sample_models/PrecheckDemoWeapon/lib
-        LIBRARY DESTINATION sample_models/PrecheckDemoWeapon/models)
-install(FILES
-        sample_models/PrecheckDemoWeapon/WeaponModel.h
-        sample_models/PrecheckDemoWeapon/WeaponObject.h
-        DESTINATION sample_models/PrecheckDemoWeapon/include)
-install(FILES sample_models/PrecheckDemoWeapon/README.md
-        DESTINATION sample_models/PrecheckDemoWeapon)
-
-install(FILES sample_models/StandardWeapon/WeaponModel.h
-        DESTINATION sample_models/StandardWeapon/include)
-install(FILES sample_models/MultiInstanceWeapon/WeaponModel.h
-        DESTINATION sample_models/MultiInstanceWeapon/include)
-install(FILES sample_models/MultiInstanceWeapon/WeaponObject.h
-        DESTINATION sample_models/MultiInstanceWeapon/include)
-install(FILES sample_models/RenamedInterfaceWeapon/WeaponModel.h
-        DESTINATION sample_models/RenamedInterfaceWeapon/include)
-install(FILES sample_models/ConflictWeaponA/WeaponModel.h
-        DESTINATION sample_models/ConflictWeaponA/include)
-install(FILES sample_models/ConflictWeaponB/WeaponModel.h
-        DESTINATION sample_models/ConflictWeaponB/include)
-install(FILES sample_models/CompatibleWeaponC/WeaponModel.h
-        DESTINATION sample_models/CompatibleWeaponC/include)
-install(FILES sample_models/CompatibleWeaponD/WeaponModel.h
-        DESTINATION sample_models/CompatibleWeaponD/include)
+# CompatibleWeapon F/G + testcase_kit packages (include/lib/models)
 install(TARGETS CompatibleWeaponF
         RUNTIME DESTINATION sample_models/CompatibleWeaponF/models
         ARCHIVE DESTINATION sample_models/CompatibleWeaponF/lib
