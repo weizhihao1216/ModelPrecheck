@@ -114,6 +114,7 @@ PeAnalysisReport PeAnalyzer::AnalyzeDll(const std::string& dllPath,
 
     // --- Parse Imports & CRT Linkage ---
     bool hasCrtDll = false;
+    bool looksDebugCrt = false;
     std::string detectedCrt = "";
 
     if (importDataDir.VirtualAddress != 0 && importDataDir.Size != 0) {
@@ -142,6 +143,12 @@ PeAnalysisReport PeAnalyzer::AnalyzeDll(const std::string& dllPath,
                         hasCrtDll = true;
                         if (detectedCrt.empty()) detectedCrt = dllName;
                         else detectedCrt += ", " + std::string(dllName);
+                        // Debug CRT names typically end with 'd' before .dll (ucrtbased, vcruntime140d, ...)
+                        if (upperDllName.find("UCRTBASED") != std::string::npos
+                            || (upperDllName.size() > 5
+                                && upperDllName.compare(upperDllName.size() - 5, 5, "D.DLL") == 0)) {
+                            looksDebugCrt = true;
+                        }
                     }
 
                     report.importedDlls.push_back(info);
@@ -152,11 +159,17 @@ PeAnalysisReport PeAnalyzer::AnalyzeDll(const std::string& dllPath,
     }
 
     if (hasCrtDll) {
-        report.crtLinkage = "Dynamic CRT (/MD or /MDd) [" + detectedCrt + "]";
+        report.crtLinkage = looksDebugCrt
+            ? ("Dynamic Debug CRT (/MDd) [" + detectedCrt + "]")
+            : ("Dynamic Release CRT (/MD) [" + detectedCrt + "]");
     } else {
         report.crtLinkage = "Static CRT (/MT or /MTd) or No CRT dependency";
     }
     report.logMessages.push_back("INFO: CRT Linkage identified as: " + report.crtLinkage);
+    if (looksDebugCrt) {
+        report.logMessages.push_back(
+            "INFO: 该 DLL 依赖 Debug 运行库（*d.dll），属于 Debug 构建产物");
+    }
 
     // Parse Export Table
     std::vector<std::string> exportedNames;

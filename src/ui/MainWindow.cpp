@@ -7,6 +7,7 @@
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QFrame>
 #include <QSplitter>
 #include <QDateTime>
 #include <QApplication>
@@ -27,16 +28,24 @@
 #include <QTabBar>
 #include <QHash>
 #include <QPair>
+#include <QIcon>
 
 #include "ChartViewerWidget.h"
 #include "TrajectoryViewWidget.h"
 #include "BusyOverlayWidget.h"
+#include "SessionRestoreDialog.h"
+#include "PrecheckSummaryDialog.h"
 #include "../utils/QtEncoding.h"
 #include <QEventLoop>
 #include <QStyle>
+#include <QCloseEvent>
+#include <QTimer>
 #include <algorithm>
 #include <functional>
 #include <set>
+
+#include "../core/SessionStore.h"
+#include "../core/PrecheckSummary.h"
 
 namespace {
 
@@ -125,7 +134,7 @@ MainWindow::MainWindow(QWidget* parent)
     qRegisterMetaType<PerfSample>("PerfSample");
     qRegisterMetaType<ConcurrencyTestReport>("ConcurrencyTestReport");
 
-    setWindowTitle("第三方武器模型 DLL 集成预检工具 (Model Validator) v1.1");
+    setWindowTitle("第三方武器模型 DLL 集成预检工具 (Model Verification) v1.1");
     resize(1440, 900);
 
     QWidget* centralWidget = new QWidget(this);
@@ -160,6 +169,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_lblHeaderStatus = new QLabel("头文件预检: N/A", this);
     m_lblLibStatus = new QLabel("LIB 库预检: N/A", this);
     m_lblDllStatus = new QLabel("DLL 动态库预检: N/A", this);
+    m_lblBuildConfigStatus = new QLabel("Release/Debug: N/A", this);
 
     QString baseBadgeStyle =
         "QLabel { padding: 4px 14px; border-radius: 12px; font-weight: bold; font-size: 12px; "
@@ -167,13 +177,18 @@ MainWindow::MainWindow(QWidget* parent)
     m_lblHeaderStatus->setStyleSheet(baseBadgeStyle);
     m_lblLibStatus->setStyleSheet(baseBadgeStyle);
     m_lblDllStatus->setStyleSheet(baseBadgeStyle);
+    m_lblBuildConfigStatus->setStyleSheet(baseBadgeStyle);
     m_lblHeaderStatus->setMinimumWidth(140);
     m_lblLibStatus->setMinimumWidth(140);
     m_lblDllStatus->setMinimumWidth(160);
+    m_lblBuildConfigStatus->setMinimumWidth(200);
+    m_lblBuildConfigStatus->setToolTip(
+        QStringLiteral("对照集成问题：编译 Debug 报错、Release 成功（厂家常不提供 Debug 库）"));
 
     layoutBadges->addWidget(m_lblHeaderStatus);
     layoutBadges->addWidget(m_lblLibStatus);
     layoutBadges->addWidget(m_lblDllStatus);
+    layoutBadges->addWidget(m_lblBuildConfigStatus);
     layoutBadges->addStretch(1);
 
     // --- Guided workflow: always shows where the user is and what comes next ---
@@ -207,19 +222,56 @@ MainWindow::MainWindow(QWidget* parent)
     QGroupBox* grpNavigation = new QGroupBox("功能导航", this);
     QVBoxLayout* navigationLayout = new QVBoxLayout(grpNavigation);
     m_listTestNavigation = new QListWidget(grpNavigation);
-    m_listTestNavigation->addItem(QStringLiteral("头文件规范检查"));
-    m_listTestNavigation->addItem(QStringLiteral("LIB 库文件检查"));
-    m_listTestNavigation->addItem(QStringLiteral("DLL 文件与依赖检查"));
-    m_listTestNavigation->addItem(QStringLiteral("DLL 接口与加载检查"));
-    m_listTestNavigation->addItem(QStringLiteral("UserMain 性能压测"));
-    m_listTestNavigation->addItem(QStringLiteral("内存泄漏监测"));
-    m_listTestNavigation->addItem(QStringLiteral("运行轨迹查看"));
-    m_listTestNavigation->addItem(QStringLiteral("多型号并行"));
-    m_listTestNavigation->addItem(QStringLiteral("多线程稳定性"));
-    m_listTestNavigation->addItem(QStringLiteral("单线程多对象"));
-    m_listTestNavigation->addItem(QStringLiteral("查看报告"));
+    const QStringList navTitles = {
+        QStringLiteral("头文件规范检查"),
+        QStringLiteral("LIB 库文件检查"),
+        QStringLiteral("DLL 文件与依赖检查"),
+        QStringLiteral("DLL 接口与加载检查"),
+        QStringLiteral("UserMain 性能压测"),
+        QStringLiteral("内存泄漏监测"),
+        QStringLiteral("运行轨迹查看"),
+        QStringLiteral("多型号并行"),
+        QStringLiteral("多线程稳定性"),
+        QStringLiteral("单线程多对象"),
+        QStringLiteral("查看报告")
+    };
+    for (const QString& title : navTitles) {
+        auto* item = new QListWidgetItem(title);
+        item->setData(Qt::UserRole, title);
+        m_listTestNavigation->addItem(item);
+    }
     m_listTestNavigation->setProperty("testNavigation", true);
+
+    m_lblNavLegend = new QLabel(grpNavigation);
+    m_lblNavLegend->setObjectName(QStringLiteral("navStatusLegend"));
+    m_lblNavLegend->setWordWrap(true);
+    m_lblNavLegend->setTextFormat(Qt::RichText);
+    m_lblNavLegend->setText(
+        QStringLiteral("<div style='text-align:center;line-height:1.35;margin:0;padding:0;'>"
+                       "<span style='color:#34d399;font-size:13px;'>●</span>"
+                       "<span style='color:#ffffff;font-weight:bold;font-size:13px;'> 通过</span>"
+                       "&nbsp;&nbsp;"
+                       "<span style='color:#f87171;font-size:13px;'>●</span>"
+                       "<span style='color:#ffffff;font-weight:bold;font-size:13px;'> 未通过</span>"
+                       "<br/>"
+                       "<span style='color:#fbbf24;font-size:13px;'>●</span>"
+                       "<span style='color:#ffffff;font-weight:bold;font-size:13px;'> 警告</span>"
+                       "&nbsp;&nbsp;"
+                       "<span style='color:#94a3b8;font-size:13px;'>●</span>"
+                       "<span style='color:#ffffff;font-weight:bold;font-size:13px;'> 未测试</span>"
+                       "</div>"));
+    m_lblNavLegend->setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
+    m_lblNavLegend->setStyleSheet(
+        QStringLiteral("QLabel#navStatusLegend {"
+                       "  color: #ffffff;"
+                       "  font-size: 13px;"
+                       "  padding: 0px 4px 4px 4px;"
+                       "  margin: 0px;"
+                       "  border-bottom: 1px solid #2d3f4f;"
+                       "}"));
+    navigationLayout->addWidget(m_lblNavLegend, 0);
     navigationLayout->addWidget(m_listTestNavigation, 1);
+    refreshNavigationStatus();
 
     // ========== Middle: fixed model list ==========
     QGroupBox* grpModels = new QGroupBox("型号列表", this);
@@ -238,10 +290,12 @@ MainWindow::MainWindow(QWidget* parent)
     // ========== Right: one scrollable workflow page ==========
     QGroupBox* rightPanel = new QGroupBox("型号与 UserMain 配置", this);
     m_modelSetupPanel = rightPanel;
-    // Taller than test workspace so editor + lower pane have room to grow.
-    m_modelSetupPanel->setMinimumHeight(1100);
+    // Grow only after a valid package path reveals the detail editor; keep compact before that.
+    m_modelSetupPanel->setMinimumHeight(0);
+    m_modelSetupPanel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
     QVBoxLayout* rightLayout = new QVBoxLayout(rightPanel);
     rightLayout->setContentsMargins(12, 12, 12, 12);
+    rightLayout->setSpacing(8);
 
     QFormLayout* formModel = new QFormLayout();
     formModel->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
@@ -258,16 +312,22 @@ MainWindow::MainWindow(QWidget* parent)
     formModel->addRow("模型包路径:", pkgRow);
     m_lblLicenseHint = new QLabel(PackageLayoutHintText(), this);
     m_lblLicenseHint->setWordWrap(true);
-    m_lblLicenseHint->setStyleSheet("color: #14b8a6; font-size: 11px;");
+    m_lblLicenseHint->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_lblLicenseHint->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+    m_lblLicenseHint->setStyleSheet(
+        "color: #14b8a6; font-size: 11px; padding: 6px 8px;"
+        "background-color: #141c24; border: 1px solid #2d3f4f; border-radius: 4px;");
     rightLayout->addLayout(formModel);
-    rightLayout->addWidget(m_lblLicenseHint);
+    rightLayout->addWidget(m_lblLicenseHint, 0);
 
     m_lblPathStageStatus = new QLabel(
         QStringLiteral("步骤 2：请选择符合 include/lib/models 目录结构的模型包根目录，"
                        "随后将从 include/ 读取头文件。"), this);
     m_lblPathStageStatus->setWordWrap(true);
+    m_lblPathStageStatus->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_lblPathStageStatus->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
     m_lblPathStageStatus->setProperty("pathStageStatus", true);
-    rightLayout->addWidget(m_lblPathStageStatus);
+    rightLayout->addWidget(m_lblPathStageStatus, 0);
 
     m_modelDetailPanel = new QWidget(grpModels);
     m_modelDetailPanel->setObjectName(QStringLiteral("modelDetailPanel"));
@@ -382,6 +442,8 @@ MainWindow::MainWindow(QWidget* parent)
     syncUserMainSplitterHeight();
     detailLayout->addWidget(userMainSplitter, 10);
     rightLayout->addWidget(m_modelDetailPanel, 1);
+    // Keep leftover scroll space below the compact header when detail is hidden.
+    rightLayout->addStretch(0);
 
     // ========== Right tabs ==========
     m_pCentralTabs = new QTabWidget(this);
@@ -408,11 +470,17 @@ MainWindow::MainWindow(QWidget* parent)
     layoutTabHeader->addLayout(layoutHeaderPick);
     m_lblHeaderResult = new QLabel(QStringLiteral("检查结果: 尚未执行"), tabHeader);
     layoutTabHeader->addWidget(m_lblHeaderResult);
+    m_pageResultHeader = createPageResultPanel(
+        tabHeader, layoutTabHeader, QStringLiteral("头文件规范 — 测试结果"));
+    m_pageResultHeaderConflict = createPageResultPanel(
+        tabHeader, layoutTabHeader, QStringLiteral("跨型号头文件冲突 — 测试结果"));
     m_tblHeaderFunctions = new QTableWidget(0, 2, tabHeader);
     m_tblHeaderFunctions->setHorizontalHeaderLabels({ QStringLiteral("接口函数"), QStringLiteral("完整声明") });
     m_tblHeaderFunctions->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_tblHeaderFunctions->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    layoutTabHeader->addWidget(m_tblHeaderFunctions, 1);
+    m_tblHeaderFunctions->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
+    m_tblHeaderFunctions->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    layoutTabHeader->addWidget(m_tblHeaderFunctions, 0);
     m_lblHeaderConflictSummary = new QLabel(
         QStringLiteral("包级冲突检查: 尚未执行"), tabHeader);
     layoutTabHeader->addWidget(m_lblHeaderConflictSummary);
@@ -423,7 +491,10 @@ MainWindow::MainWindow(QWidget* parent)
     });
     m_tblHeaderConflicts->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_tblHeaderConflicts->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    layoutTabHeader->addWidget(m_tblHeaderConflicts, 1);
+    m_tblHeaderConflicts->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
+    m_tblHeaderConflicts->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    layoutTabHeader->addWidget(m_tblHeaderConflicts, 0);
+    layoutTabHeader->addStretch(1);
 
     // Tab 1: LIB file check
     QWidget* tabLib = new QWidget(this);
@@ -447,6 +518,8 @@ MainWindow::MainWindow(QWidget* parent)
     layoutTabLib->addLayout(layoutLibPick);
     m_lblLibResult = new QLabel(QStringLiteral("检查结果: 尚未执行"), tabLib);
     layoutTabLib->addWidget(m_lblLibResult);
+    m_pageResultLib = createPageResultPanel(
+        tabLib, layoutTabLib, QStringLiteral("LIB 库文件 — 测试结果"));
     m_tblLibSymbols = new QTableWidget(0, 1, tabLib);
     m_tblLibSymbols->setHorizontalHeaderLabels({ QStringLiteral("LIB 中发现的符号") });
     m_tblLibSymbols->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
@@ -484,6 +557,12 @@ MainWindow::MainWindow(QWidget* parent)
     layoutPeInfo->addWidget(m_lblPeArch);
     layoutPeInfo->addWidget(m_lblPeCrt);
     layoutPeInfo->addStretch(1);
+    layoutTabPe->addLayout(layoutPeInfo);
+
+    m_pageResultBuild = createPageResultPanel(
+        tabPe, layoutTabPe, QStringLiteral("Release / Debug 构建产物 — 测试结果"));
+    m_pageResultPe = createPageResultPanel(
+        tabPe, layoutTabPe, QStringLiteral("DLL 依赖检查 — 测试结果"));
 
     QGroupBox* grpImports = new QGroupBox("DLL 依赖文件检查", this);
     QVBoxLayout* lImp = new QVBoxLayout(grpImports);
@@ -493,7 +572,6 @@ MainWindow::MainWindow(QWidget* parent)
     m_tblImports->setEditTriggers(QAbstractItemView::NoEditTriggers);
     lImp->addWidget(m_tblImports);
 
-    layoutTabPe->addLayout(layoutPeInfo);
     layoutTabPe->addWidget(grpImports, 1);
 
     // Tab 3: DLL exported interfaces and safe loading
@@ -528,6 +606,8 @@ MainWindow::MainWindow(QWidget* parent)
     layoutLoadInfo->addWidget(m_lblLoadApi);
     layoutLoadInfo->addStretch(1);
     layoutTabLoad->addLayout(layoutLoadInfo);
+    m_pageResultLoad = createPageResultPanel(
+        tabLoad, layoutTabLoad, QStringLiteral("DLL 接口与加载 — 测试结果"));
 
     QGroupBox* grpExports = new QGroupBox("DLL 对外接口检查", tabLoad);
     QVBoxLayout* lExp = new QVBoxLayout(grpExports);
@@ -590,10 +670,13 @@ MainWindow::MainWindow(QWidget* parent)
     m_lblTrajOut = new QLabel(
         QStringLiteral("轨迹输出: out_lat / out_lon = (未试跑)"), this);
     m_lblTrajOut->setWordWrap(true);
+    m_lblTrajOut->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+    m_lblTrajOut->setMaximumHeight(40);
 
     m_pChartViewer = new ChartViewerWidget(this);
     m_pTrajectoryView = new TrajectoryViewWidget(this);
-    m_pTrajectoryView->setMinimumHeight(220);
+    // Height comes from hardcoded layout stretch (5:4 ≈ chart 6:3 × 5/6); no max-height gap.
+    m_pTrajectoryView->setMinimumHeight(160);
     m_pTrajectoryView->setMinimumWidth(280);
 
     m_tblTrajectoryPoints = new QTableWidget(0, 3, this);
@@ -605,12 +688,13 @@ MainWindow::MainWindow(QWidget* parent)
     m_tblTrajectoryPoints->setMinimumWidth(220);
     m_tblTrajectoryPoints->setAlternatingRowColors(true);
 
-    QSplitter* splitterPerf = new QSplitter(Qt::Vertical, this);
-    splitterPerf->addWidget(m_pChartViewer);
+    m_splitterPerf = new QSplitter(Qt::Vertical, this);
+    m_splitterPerf->addWidget(m_pChartViewer);
     m_trajectoryPanel = new QWidget(this);
     QVBoxLayout* trajLayout = new QVBoxLayout(m_trajectoryPanel);
     trajLayout->setContentsMargins(0, 0, 0, 0);
-    trajLayout->addWidget(m_lblTrajOut);
+    trajLayout->setSpacing(4);
+    trajLayout->addWidget(m_lblTrajOut, 0);
     QSplitter* splitterTraj = new QSplitter(Qt::Horizontal, m_trajectoryPanel);
     splitterTraj->addWidget(m_pTrajectoryView);
     QWidget* tblWrap = new QWidget(m_trajectoryPanel);
@@ -622,13 +706,20 @@ MainWindow::MainWindow(QWidget* parent)
     splitterTraj->setStretchFactor(0, 3);
     splitterTraj->setStretchFactor(1, 2);
     trajLayout->addWidget(splitterTraj, 1);
-    splitterPerf->addWidget(m_trajectoryPanel);
-    splitterPerf->setStretchFactor(0, 3);
-    splitterPerf->setStretchFactor(1, 2);
+    m_splitterPerf->addWidget(m_trajectoryPanel);
+    m_splitterPerf->setStretchFactor(0, 3);
+    m_splitterPerf->setStretchFactor(1, 2);
 
     layoutTabPerf->addWidget(m_lblPerfSummary);
-    // Chart occupies 6/9 of leftover height; spacer holds the shortened 3/9.
-    layoutTabPerf->addWidget(splitterPerf, 6);
+    m_pageResultPerf = createPageResultPanel(
+        tabPerf, layoutTabPerf, QStringLiteral("性能压测 — 测试结果"));
+    m_pageResultMemory = createPageResultPanel(
+        tabPerf, layoutTabPerf, QStringLiteral("内存泄漏监测 — 测试结果"));
+    m_pageResultTraj = createPageResultPanel(
+        tabPerf, layoutTabPerf, QStringLiteral("运行轨迹 — 测试结果"));
+    // Hardcoded leftover ratios: chart 6:3；轨迹 5:4（≈ 压测区 × 5/6，去掉拉高留白）.
+    m_layoutTabPerf = layoutTabPerf;
+    layoutTabPerf->addWidget(m_splitterPerf, 6);
     m_perfChartBottomSpacer = new QWidget(tabPerf);
     m_perfChartBottomSpacer->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     m_perfChartBottomSpacer->setMinimumHeight(0);
@@ -666,6 +757,8 @@ MainWindow::MainWindow(QWidget* parent)
     m_tblMultiModelResults->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_tblMultiModelResults->setEditTriggers(QAbstractItemView::NoEditTriggers);
     layoutTabMultiModel->addWidget(m_lblMultiModelSummary);
+    m_pageResultMultiModel = createPageResultPanel(
+        tabMultiModel, layoutTabMultiModel, QStringLiteral("多型号并行 — 测试结果"));
     layoutTabMultiModel->addWidget(m_tblMultiModelResults, 1);
 
     // Tab 3: Multi-thread
@@ -703,6 +796,8 @@ MainWindow::MainWindow(QWidget* parent)
     m_tblMultiThreadResults->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_tblMultiThreadResults->setEditTriggers(QAbstractItemView::NoEditTriggers);
     layoutTabMultiThr->addWidget(m_lblMultiThreadSummary);
+    m_pageResultMultiThread = createPageResultPanel(
+        tabMultiThr, layoutTabMultiThr, QStringLiteral("多线程稳定性 — 测试结果"));
     layoutTabMultiThr->addWidget(m_tblMultiThreadResults, 1);
 
     // Single-thread multi-object baseline/interleaved comparison
@@ -868,6 +963,9 @@ MainWindow::MainWindow(QWidget* parent)
     m_lblMultiObjectResult->setWordWrap(true);
     multiObjectRestLayout->addWidget(m_lblMultiObjectAdapterStatus);
     multiObjectRestLayout->addWidget(m_lblMultiObjectResult);
+    m_pageResultMultiObject = createPageResultPanel(
+        multiObjectRest, multiObjectRestLayout,
+        QStringLiteral("单线程多对象 — 测试结果"));
 
     QSplitter* multiObjectSplitter = new QSplitter(Qt::Vertical, multiObjectRest);
     m_pMultiObjectTrajectory = new TrajectoryViewWidget(multiObjectSplitter);
@@ -911,11 +1009,13 @@ MainWindow::MainWindow(QWidget* parent)
     syncMultiObjectPageSplitterHeight();
     layoutTabMultiObject->addWidget(multiObjectPageSplitter, 1);
 
-    // Report
+    // Report — only HTML browser (test-item Qt table is dialog-only, not in report page)
     QWidget* tabReport = new QWidget(this);
     QVBoxLayout* layoutTabReport = new QVBoxLayout(tabReport);
+    m_lblTestItemSummary = nullptr;
+    m_tblTestItemSummary = nullptr;
     m_pReportBrowser = new QTextBrowser(this);
-    layoutTabReport->addWidget(m_pReportBrowser);
+    layoutTabReport->addWidget(m_pReportBrowser, 1);
 
     m_pCentralTabs->addTab(tabHeader, "头文件规范检查");
     m_pCentralTabs->addTab(tabLib, "LIB 库文件检查");
@@ -1084,6 +1184,7 @@ MainWindow::MainWindow(QWidget* parent)
     updateWorkflowUi();
     applyDarkStyle();
     logMessage("INFO: 初始化完毕。请在左侧「型号与 UserMain」添加型号、配置包路径并编译，输出目录为 exe 旁 TestModel/<型号名>/。");
+    QTimer::singleShot(0, this, &MainWindow::maybeRestoreLastSession);
 }
 
 MainWindow::~MainWindow() {
@@ -1091,6 +1192,185 @@ MainWindow::~MainWindow() {
         m_pWorkerThread->quit();
         m_pWorkerThread->wait();
     }
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    saveEditorsToCurrentModel();
+    saveMultiObjectEditor();
+    QString err;
+    if (!SessionStore::Save(collectSessionSnapshot(), &err)) {
+        logMessage(QStringLiteral("WARN: 保存会话失败 — %1").arg(err));
+    } else {
+        logMessage(QStringLiteral("INFO: 已保存会话到 %1").arg(SessionStore::DefaultPath()));
+    }
+    QMainWindow::closeEvent(event);
+}
+
+SessionSnapshot MainWindow::collectSessionSnapshot() const {
+    SessionSnapshot snap;
+    snap.version = 1;
+    snap.savedAt = QDateTime::currentDateTime();
+    snap.currentModelIndex = m_currentModelIndex;
+    snap.navigationRow = m_listTestNavigation ? m_listTestNavigation->currentRow() : -1;
+    snap.perfSteps = m_spnSteps ? m_spnSteps->value() : 10000;
+    snap.perfHz = m_comboHz ? m_comboHz->currentData().toDouble() : 50.0;
+    snap.threadCount = m_spnThreadCount ? m_spnThreadCount->value() : 4;
+    snap.windowGeometry = saveGeometry();
+
+    for (const auto& entry : m_models) {
+        SessionModelSnapshot m;
+        m.name = entry.name;
+        m.packageDir = entry.packageDir;
+        m.headerPaths = entry.headerPaths;
+        m.userMainBody = entry.userMainBody;
+        m.userMultiObjectBody = entry.userMultiObjectBody;
+        m.randomVars = entry.randomVars;
+        m.instanceCount = entry.instanceCount;
+        m.multiObjectCount = entry.multiObjectCount;
+        m.multiObjectSteps = entry.multiObjectSteps;
+        m.multiObjectDt = entry.multiObjectDt;
+        m.multiObjectTolerance = entry.multiObjectTolerance;
+        m.multiObjectSchedule = static_cast<int>(entry.multiObjectSchedule);
+        m.status = entry.status;
+        if (entry.harness && entry.harness->IsLoaded())
+            m.lastUserHarnessDll = qUtf8(entry.harness->DllPath());
+        if (entry.multiObjectHarness && entry.multiObjectHarness->IsLoaded())
+            m.lastMultiObjectHarnessDll = qUtf8(entry.multiObjectHarness->DllPath());
+        snap.models.push_back(m);
+    }
+    return snap;
+}
+
+void MainWindow::applySessionSnapshot(const SessionSnapshot& snapshot) {
+    m_models.clear();
+    m_currentModelIndex = -1;
+    m_latestFleetReport = FleetSessionReport();
+    m_latestReport = CombinedPrecheckReport();
+
+    for (const auto& src : snapshot.models) {
+        FleetModelEntry entry;
+        entry.name = src.name.trimmed().isEmpty()
+            ? QStringLiteral("model%1").arg(m_models.size() + 1) : src.name;
+        entry.packageDir = QDir::toNativeSeparators(src.packageDir);
+        entry.headerPaths = src.headerPaths;
+        entry.userMainBody = src.userMainBody;
+        entry.userMultiObjectBody = src.userMultiObjectBody;
+        entry.randomVars = src.randomVars;
+        if (entry.randomVars.empty())
+            entry.randomVars = DefaultRandomVars();
+        if (entry.userMainBody.trimmed().isEmpty())
+            entry.userMainBody = qUtf8(UserCodeHarness::DefaultUserMainTemplate());
+        if (entry.userMultiObjectBody.trimmed().isEmpty())
+            entry.userMultiObjectBody =
+                qUtf8(MultiObjectHarness::DefaultUserMultiObjectTemplate());
+        entry.instanceCount = qMax(1, src.instanceCount);
+        entry.multiObjectCount = qMax(2, src.multiObjectCount);
+        entry.multiObjectSteps = qMax(1, src.multiObjectSteps);
+        entry.multiObjectDt = src.multiObjectDt > 0 ? src.multiObjectDt : 0.02;
+        entry.multiObjectTolerance = src.multiObjectTolerance;
+        entry.multiObjectSchedule = static_cast<MultiObjectSchedule>(
+            qBound(0, src.multiObjectSchedule, 2));
+        entry.status = QStringLiteral("未编译");
+
+        if (!src.lastUserHarnessDll.isEmpty()
+            && QFileInfo::exists(src.lastUserHarnessDll)) {
+            entry.harness = std::make_shared<UserCodeHarness>();
+            std::string err;
+            if (entry.harness->LoadCompiledDll(qToUtf8(src.lastUserHarnessDll), err)) {
+                entry.harness->SetEnabledRandomVars(entry.randomVars);
+                entry.status = QStringLiteral("已加载");
+            } else {
+                entry.harness.reset();
+                entry.status = QStringLiteral("会话已还原（需重新编译）");
+                logMessage(QStringLiteral("WARN: 型号「%1」UserMain Harness 未能加载：%2")
+                    .arg(entry.name).arg(qUtf8(err)));
+            }
+        } else if (!src.status.isEmpty()) {
+            entry.status = QStringLiteral("会话已还原（需重新编译）");
+        }
+
+        if (!src.lastMultiObjectHarnessDll.isEmpty()
+            && QFileInfo::exists(src.lastMultiObjectHarnessDll)) {
+            entry.multiObjectHarness = std::make_shared<MultiObjectHarness>();
+            std::string err;
+            if (entry.multiObjectHarness->LoadCompiledDll(
+                    qToUtf8(src.lastMultiObjectHarnessDll), err)) {
+                entry.multiObjectHarness->SetEnabledRandomVars(entry.randomVars);
+                entry.multiObjectMapping.abiValidated = true;
+            } else {
+                entry.multiObjectHarness.reset();
+                logMessage(QStringLiteral("WARN: 型号「%1」多对象 Harness 未能加载：%2")
+                    .arg(entry.name).arg(qUtf8(err)));
+            }
+        }
+
+        m_models.push_back(entry);
+    }
+
+    if (m_spnSteps)
+        m_spnSteps->setValue(qMax(1, snapshot.perfSteps));
+    if (m_comboHz) {
+        int hzIndex = m_comboHz->findData(snapshot.perfHz);
+        if (hzIndex < 0) {
+            for (int i = 0; i < m_comboHz->count(); ++i) {
+                if (qFuzzyCompare(m_comboHz->itemData(i).toDouble(), snapshot.perfHz)) {
+                    hzIndex = i;
+                    break;
+                }
+            }
+        }
+        if (hzIndex >= 0) m_comboHz->setCurrentIndex(hzIndex);
+    }
+    if (m_spnThreadCount)
+        m_spnThreadCount->setValue(qBound(1, snapshot.threadCount, 64));
+
+    if (!snapshot.windowGeometry.isEmpty())
+        restoreGeometry(snapshot.windowGeometry);
+
+    refreshModelListUi();
+    refreshFleetCountTable();
+    refreshModelSelectors();
+
+    int modelRow = snapshot.currentModelIndex;
+    if (modelRow < 0 || modelRow >= static_cast<int>(m_models.size()))
+        modelRow = m_models.empty() ? -1 : 0;
+    if (modelRow >= 0) {
+        m_listModels->setCurrentRow(modelRow);
+        loadEditorsFromModel(modelRow);
+    } else {
+        loadEditorsFromModel(-1);
+    }
+
+    if (snapshot.navigationRow >= 0
+        && snapshot.navigationRow < m_listTestNavigation->count()) {
+        m_listTestNavigation->setCurrentRow(snapshot.navigationRow);
+    } else {
+        QSignalBlocker blocker(m_listTestNavigation);
+        m_listTestNavigation->setCurrentRow(-1);
+        updateWorkflowUi();
+    }
+    refreshFleetMultiObjectTable();
+    updateWorkflowUi();
+}
+
+void MainWindow::maybeRestoreLastSession() {
+    if (!SessionStore::Exists()) return;
+    SessionSnapshot snapshot;
+    QString err;
+    if (!SessionStore::Load(snapshot, &err)) {
+        logMessage(QStringLiteral("WARN: 读取上次会话失败 — %1").arg(err));
+        return;
+    }
+    if (snapshot.models.empty()) return;
+
+    SessionRestoreDialog dialog(snapshot, this);
+    if (dialog.exec() != QDialog::Accepted || !dialog.shouldRestore()) {
+        logMessage(QStringLiteral("INFO: 已跳过还原上次会话"));
+        return;
+    }
+    applySessionSnapshot(snapshot);
+    logMessage(QStringLiteral("INFO: 已还原上次会话（%1 个型号）")
+        .arg(snapshot.models.size()));
 }
 
 void MainWindow::applyDarkStyle() {
@@ -1372,6 +1652,18 @@ void MainWindow::updateWorkflowUi() {
     m_emptyWorkflowPanel->setVisible(navigationBlocked || (!hasSelection && !testPageSelected));
     m_modelSetupPanel->setVisible(hasSelection && !testPageSelected);
     m_modelDetailPanel->setVisible(pathValid);
+    if (m_modelSetupPanel) {
+        // Compact while waiting for package path; expand once UserMain editor shows.
+        if (pathValid) {
+            m_modelSetupPanel->setMinimumHeight(780);
+            m_modelSetupPanel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+        } else {
+            m_modelSetupPanel->setMinimumHeight(0);
+            m_modelSetupPanel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+        }
+    }
+    if (m_lblLicenseHint)
+        m_lblLicenseHint->setVisible(hasSelection && !pathValid);
     m_testSection->setVisible(testPageSelected && testPageAccessible);
     m_btnRefreshModelHeaders->setEnabled(pathValid);
     m_listHarnessHeaders->setEnabled(pathValid);
@@ -1447,10 +1739,17 @@ void MainWindow::updateWorkflowUi() {
     m_comboMultiObjectSchedule->setEnabled(multiObjectReady);
 
     if (hasSelection) {
-        if (pathValid) {
+        if (pathValid && current) {
+            const ModelPackageFiles scanned =
+                PackageScanner::ScanPackageDirectory(qToUtf8(current->packageDir));
+            const BuildConfigCapability cap =
+                PrecheckSummary::EvaluateBuildConfig(scanned, qToUtf8(current->name));
             m_lblPathStageStatus->setText(
-                QStringLiteral("模型包目录结构有效（include / lib / models）。"
-                               "请继续从 include/ 选择头文件、编写 UserMain 并完成编译。"));
+                QStringLiteral("模型包目录结构有效（include / lib / models）。\n"
+                               "Release：%1\n"
+                               "Debug：%2\n"
+                               "请继续选择头文件、编写 UserMain 并完成编译。")
+                    .arg(qUtf8(cap.releaseSummary), qUtf8(cap.debugSummary)));
             m_lblPathStageStatus->setProperty("pathValid", true);
         } else {
             m_lblPathStageStatus->setText(
@@ -1923,6 +2222,9 @@ void MainWindow::onTestNavigationChanged(int row) {
         return;
     }
 
+    // Re-apply status text colors (selected row forced white).
+    refreshNavigationStatus();
+
     int tabIndex = 0;
     if (row <= 3) {
         tabIndex = row;
@@ -1951,8 +2253,22 @@ void MainWindow::onTestNavigationChanged(int row) {
         m_pChartViewer->setVisible(!trajectoryMode);
         m_trajectoryPanel->setVisible(trajectoryMode);
         m_lblPerfSummary->setVisible(!trajectoryMode);
-        if (m_perfChartBottomSpacer)
-            m_perfChartBottomSpacer->setVisible(!trajectoryMode);
+        if (m_pageResultPerf.frame) m_pageResultPerf.frame->setVisible(row == 4);
+        if (m_pageResultMemory.frame) m_pageResultMemory.frame->setVisible(row == 5);
+        if (m_pageResultTraj.frame) m_pageResultTraj.frame->setVisible(row == 6);
+        // Always keep spacer; switch stretch so trajectory area is fixed at 5/9 leftover.
+        if (m_perfChartBottomSpacer) m_perfChartBottomSpacer->setVisible(true);
+        if (m_layoutTabPerf && m_splitterPerf && m_perfChartBottomSpacer) {
+            const int splitterIdx = m_layoutTabPerf->indexOf(m_splitterPerf);
+            const int spacerIdx = m_layoutTabPerf->indexOf(m_perfChartBottomSpacer);
+            if (trajectoryMode) {
+                if (splitterIdx >= 0) m_layoutTabPerf->setStretch(splitterIdx, 5);
+                if (spacerIdx >= 0) m_layoutTabPerf->setStretch(spacerIdx, 4);
+            } else {
+                if (splitterIdx >= 0) m_layoutTabPerf->setStretch(splitterIdx, 6);
+                if (spacerIdx >= 0) m_layoutTabPerf->setStretch(spacerIdx, 3);
+            }
+        }
         if (!trajectoryMode) {
             m_pChartViewer->SetCurrentChart(row == 4 ? 0 : 1);
             m_btnRunStress->setText(row == 4
@@ -3478,6 +3794,24 @@ DualBuildPrecheckReport MainWindow::precheckOneModel(const FleetModelEntry& entr
         logMessage(qDecodeLog(msg));
     }
 
+    {
+        const BuildConfigCapability buildCap =
+            PrecheckSummary::EvaluateBuildConfig(pkgFiles, dual.modelName);
+        dual.releaseBuildOk = (buildCap.releaseVerdict == "PASS" || buildCap.releaseVerdict == "WARN")
+            && buildCap.canUseRelease;
+        dual.debugBuildOk = buildCap.canCompileDebug;
+        dual.releaseBuildSummary = buildCap.releaseSummary;
+        dual.debugBuildSummary = buildCap.debugSummary;
+        logMessage(QStringLiteral("INFO: [%1] %2")
+            .arg(entry.name, qUtf8(buildCap.releaseSummary)));
+        logMessage(QStringLiteral("%1: [%2] %3")
+            .arg(buildCap.canCompileDebug ? QStringLiteral("PASS") : QStringLiteral("FAIL"),
+                 entry.name, qUtf8(buildCap.debugSummary)));
+        for (const auto& note : buildCap.notes) {
+            logMessage(QStringLiteral("INFO: %1").arg(qUtf8(note)));
+        }
+    }
+
     std::vector<std::string> combinedHeaderFuncs;
     std::vector<std::string> combinedBinaryExports;
 
@@ -4008,8 +4342,23 @@ void MainWindow::runFullPrecheck() {
     refreshReportBrowser();
     updateWorkflowUi();
 
-    logMessage(QString("SUCCESS: 全部型号预检完毕！通过 %1/%2")
-        .arg(passedModels).arg(m_models.size()));
+    const PrecheckSummaryBoard board = PrecheckSummary::BuildFromFleet(m_latestFleetReport);
+    m_latestSummaryBoard = board;
+    m_hasSummaryBoard = true;
+    updateTestItemSummaryView(board);
+    refreshAllPageResultPanels();
+
+    // Jump to report so pass/fail/pending is immediately visible
+    if (m_listTestNavigation) {
+        m_listTestNavigation->setCurrentRow(m_listTestNavigation->count() - 1);
+    }
+
+    logMessage(QString("SUCCESS: 全部型号预检完毕！通过 %1/%2；测试项 通过%3 / 未通过%4 / 警告%5 / 未测或跳过%6")
+        .arg(passedModels).arg(m_models.size())
+        .arg(board.passCount).arg(board.failCount).arg(board.warnCount)
+        .arg(board.notRunCount + board.skippedCount));
+
+    showPrecheckSummaryDialog(board);
 }
 
 void MainWindow::runStressTestOnly() {
@@ -4337,6 +4686,34 @@ void MainWindow::updateHeaderConflictView(const HeaderConflictReport& report) {
         m_tblHeaderConflicts->setItem(row, 3, new QTableWidgetItem(files.join(QStringLiteral("\n"))));
         m_tblHeaderConflicts->setItem(row, 4, new QTableWidgetItem(qUtf8(issue.detail)));
     }
+    fitHeaderTablesToContents();
+}
+
+void MainWindow::fitHeaderTablesToContents() {
+    auto fitOne = [](QTableWidget* table, int maxVisibleRows) {
+        if (!table) return;
+        table->resizeRowsToContents();
+        const int headerH = table->horizontalHeader()->isVisible()
+            ? table->horizontalHeader()->height()
+            : 0;
+        const int rows = table->rowCount();
+        int bodyH = 0;
+        if (rows == 0) {
+            bodyH = table->verticalHeader()->defaultSectionSize();
+        } else {
+            const int visible = qMin(rows, maxVisibleRows);
+            for (int i = 0; i < visible; ++i)
+                bodyH += qMax(table->rowHeight(i), 24);
+            if (rows > maxVisibleRows)
+                bodyH += table->horizontalScrollBar()->sizeHint().height();
+        }
+        const int frame = table->frameWidth() * 2 + 4;
+        table->setFixedHeight(headerH + bodyH + frame);
+        table->setVerticalScrollBarPolicy(
+            rows > maxVisibleRows ? Qt::ScrollBarAsNeeded : Qt::ScrollBarAlwaysOff);
+    };
+    fitOne(m_tblHeaderFunctions, 12);
+    fitOne(m_tblHeaderConflicts, 10);
 }
 
 void MainWindow::updateResultTable(QTableWidget* table, const ConcurrencyTestReport& report) {
@@ -4428,6 +4805,220 @@ void MainWindow::updateStatusBadges() {
     } else {
         setBadge(m_lblDllStatus, "DLL 动态库预检", "N/A", "#e5eef7", "#003986", "#b0c4de");
     }
+
+    // Release / Debug 构建产物徽章
+    if (!m_latestFleetReport.modelReports.empty()) {
+        bool anyRelOk = false;
+        bool allDebugOk = true;
+        bool anyModel = false;
+        for (const auto& mr : m_latestFleetReport.modelReports) {
+            anyModel = true;
+            if (mr.releaseBuildOk) anyRelOk = true;
+            if (!mr.debugBuildOk) allDebugOk = false;
+        }
+        if (!anyModel) {
+            setBadge(m_lblBuildConfigStatus, "Release/Debug", "N/A",
+                     "#e5eef7", "#003986", "#b0c4de");
+        } else if (anyRelOk && allDebugOk) {
+            setBadge(m_lblBuildConfigStatus, "Release/Debug", "均可编译",
+                     "#dcfce7", "#166534", "#86efac");
+        } else if (anyRelOk) {
+            setBadge(m_lblBuildConfigStatus, "Release/Debug", "仅Release；无法编Debug",
+                     "#fef3c7", "#92400e", "#fcd34d");
+        } else {
+            setBadge(m_lblBuildConfigStatus, "Release/Debug", "Release缺失",
+                     "#fee2e2", "#991b1b", "#fca5a5");
+        }
+    } else if (!m_latestDualReport.packageDir.empty()) {
+        if (m_latestDualReport.releaseBuildOk && m_latestDualReport.debugBuildOk) {
+            setBadge(m_lblBuildConfigStatus, "Release/Debug", "均可编译",
+                     "#dcfce7", "#166534", "#86efac");
+        } else if (m_latestDualReport.releaseBuildOk) {
+            setBadge(m_lblBuildConfigStatus, "Release/Debug", "仅Release；无法编Debug",
+                     "#fef3c7", "#92400e", "#fcd34d");
+        } else {
+            setBadge(m_lblBuildConfigStatus, "Release/Debug", "N/A",
+                     "#e5eef7", "#003986", "#b0c4de");
+        }
+    } else {
+        setBadge(m_lblBuildConfigStatus, "Release/Debug", "N/A",
+                 "#e5eef7", "#003986", "#b0c4de");
+    }
+}
+
+void MainWindow::updateTestItemSummaryView(const PrecheckSummaryBoard& board) {
+    // 报告页不再嵌入 Qt 总览表（避免与 HTML 报告重复）；弹窗与各导航页仍使用 board。
+    Q_UNUSED(board);
+}
+
+PageResultWidgets MainWindow::createPageResultPanel(QWidget* parent, QVBoxLayout* layout,
+                                                    const QString& title) {
+    PageResultWidgets w;
+    w.frame = new QFrame(parent);
+    w.frame->setObjectName(QStringLiteral("pageResultPanel"));
+    w.frame->setProperty("pageResultPanel", true);
+    auto* box = new QVBoxLayout(w.frame);
+    box->setContentsMargins(10, 8, 10, 8);
+    box->setSpacing(4);
+
+    auto* titleLbl = new QLabel(title, w.frame);
+    titleLbl->setProperty("sectionTitle", true);
+    box->addWidget(titleLbl);
+
+    w.status = new QLabel(QStringLiteral("状态: 未测试"), w.frame);
+    w.status->setObjectName(QStringLiteral("pageResultStatus"));
+    w.reason = new QLabel(QStringLiteral("具体原因: 尚未执行一键预检或本项检测"), w.frame);
+    w.reason->setWordWrap(true);
+    w.consequence = new QLabel(QStringLiteral("可能导致: —"), w.frame);
+    w.consequence->setWordWrap(true);
+    box->addWidget(w.status);
+    box->addWidget(w.reason);
+    box->addWidget(w.consequence);
+    layout->addWidget(w.frame);
+    return w;
+}
+
+void MainWindow::applyPageResult(PageResultWidgets& widgets, const TestItemResult* item) {
+    if (!widgets.status || !widgets.reason || !widgets.consequence) return;
+    if (!item) {
+        widgets.status->setText(QStringLiteral("状态: 未测试"));
+        widgets.status->setStyleSheet(QStringLiteral("color: #94a3b8; font-weight: bold;"));
+        widgets.reason->setText(QStringLiteral("具体原因: 尚未执行一键预检或本项检测"));
+        widgets.consequence->setText(QStringLiteral("可能导致: 风险未知，建议执行一键预检"));
+        return;
+    }
+    const QString state = qUtf8(PrecheckSummary::StateLabel(item->state));
+    widgets.status->setText(QStringLiteral("状态: %1").arg(state));
+    QString color = QStringLiteral("#94a3b8");
+    switch (item->state) {
+    case TestItemState::Pass: color = QStringLiteral("#34d399"); break;
+    case TestItemState::Fail: color = QStringLiteral("#f87171"); break;
+    case TestItemState::Warn: color = QStringLiteral("#fbbf24"); break;
+    default: break;
+    }
+    widgets.status->setStyleSheet(
+        QStringLiteral("color: %1; font-weight: bold;").arg(color));
+    widgets.reason->setText(QStringLiteral("具体原因: %1").arg(qUtf8(item->reason)));
+    widgets.consequence->setText(
+        QStringLiteral("可能导致: %1").arg(qUtf8(item->consequence)));
+}
+
+void MainWindow::refreshAllPageResultPanels() {
+    if (!m_hasSummaryBoard) {
+        applyPageResult(m_pageResultHeader, nullptr);
+        applyPageResult(m_pageResultHeaderConflict, nullptr);
+        applyPageResult(m_pageResultLib, nullptr);
+        applyPageResult(m_pageResultBuild, nullptr);
+        applyPageResult(m_pageResultPe, nullptr);
+        applyPageResult(m_pageResultLoad, nullptr);
+        applyPageResult(m_pageResultPerf, nullptr);
+        applyPageResult(m_pageResultMemory, nullptr);
+        applyPageResult(m_pageResultTraj, nullptr);
+        applyPageResult(m_pageResultMultiModel, nullptr);
+        applyPageResult(m_pageResultMultiThread, nullptr);
+        applyPageResult(m_pageResultMultiObject, nullptr);
+        refreshNavigationStatus();
+        return;
+    }
+    const auto& b = m_latestSummaryBoard;
+    applyPageResult(m_pageResultHeader, b.findById("header"));
+    applyPageResult(m_pageResultHeaderConflict, b.findById("header_conflict"));
+    applyPageResult(m_pageResultLib, b.findById("lib"));
+    applyPageResult(m_pageResultBuild, b.findById("build_config"));
+    applyPageResult(m_pageResultPe, b.findById("dll_pe"));
+    applyPageResult(m_pageResultLoad, b.findById("dll_load"));
+    applyPageResult(m_pageResultPerf, b.findById("perf"));
+    applyPageResult(m_pageResultMemory, b.findById("memory"));
+    applyPageResult(m_pageResultTraj, b.findById("trajectory"));
+    applyPageResult(m_pageResultMultiModel, b.findById("multimodel"));
+    applyPageResult(m_pageResultMultiThread, b.findById("multithread"));
+    applyPageResult(m_pageResultMultiObject, b.findById("multiobject"));
+    refreshNavigationStatus();
+}
+
+void MainWindow::refreshNavigationStatus() {
+    if (!m_listTestNavigation) return;
+
+    auto worse = [](TestItemState a, TestItemState b) -> TestItemState {
+        auto rank = [](TestItemState s) -> int {
+            switch (s) {
+            case TestItemState::Fail: return 4;
+            case TestItemState::Warn: return 3;
+            case TestItemState::NotRun:
+            case TestItemState::Skipped: return 2;
+            case TestItemState::Pass: return 1;
+            }
+            return 0;
+        };
+        return rank(a) >= rank(b) ? a : b;
+    };
+
+    auto stateOf = [&](const char* id) -> TestItemState {
+        if (!m_hasSummaryBoard) return TestItemState::NotRun;
+        const TestItemResult* item = m_latestSummaryBoard.findById(id);
+        return item ? item->state : TestItemState::NotRun;
+    };
+
+    auto colorOf = [](TestItemState s) -> QColor {
+        switch (s) {
+        case TestItemState::Pass: return QColor(QStringLiteral("#34d399"));
+        case TestItemState::Fail: return QColor(QStringLiteral("#f87171"));
+        case TestItemState::Warn: return QColor(QStringLiteral("#fbbf24"));
+        case TestItemState::NotRun:
+        case TestItemState::Skipped: return QColor(QStringLiteral("#94a3b8"));
+        }
+        return QColor(QStringLiteral("#94a3b8"));
+    };
+
+    TestItemState states[11];
+    states[0] = worse(stateOf("header"), stateOf("header_conflict"));
+    states[1] = stateOf("lib");
+    states[2] = worse(stateOf("dll_pe"), stateOf("build_config"));
+    states[3] = stateOf("dll_load");
+    states[4] = stateOf("perf");
+    states[5] = stateOf("memory");
+    states[6] = stateOf("trajectory");
+    states[7] = stateOf("multimodel");
+    states[8] = stateOf("multithread");
+    states[9] = stateOf("multiobject");
+    states[10] = TestItemState::NotRun; // unused
+
+    const QColor defaultText(QStringLiteral("#e2e8f0"));
+    QListWidgetItem* current = m_listTestNavigation->currentItem();
+    for (int i = 0; i < m_listTestNavigation->count() && i < 11; ++i) {
+        QListWidgetItem* item = m_listTestNavigation->item(i);
+        if (!item) continue;
+        const QString base = item->data(Qt::UserRole).toString();
+        const QString title = base.isEmpty() ? item->text() : base;
+        if (item->data(Qt::UserRole).toString().isEmpty())
+            item->setData(Qt::UserRole, title);
+
+        item->setText(title);
+        item->setIcon(QIcon());
+        QFont f = item->font();
+        f.setBold(true);
+        item->setFont(f);
+
+        if (i == 10) {
+            // 查看报告：无状态色，默认文字色（悬浮/选中由 QSS 变白）
+            item->setData(Qt::UserRole + 1, QVariant::fromValue(defaultText));
+            item->setForeground(item == current ? QColor(Qt::white) : defaultText);
+            item->setToolTip(title);
+            continue;
+        }
+
+        const TestItemState st = states[i];
+        const QColor statusColor = colorOf(st);
+        const QString label = qUtf8(PrecheckSummary::StateLabel(st));
+        item->setData(Qt::UserRole + 1, QVariant::fromValue(statusColor));
+        item->setForeground(item == current ? QColor(Qt::white) : statusColor);
+        item->setToolTip(QStringLiteral("%1 — %2").arg(title, label));
+    }
+}
+
+void MainWindow::showPrecheckSummaryDialog(const PrecheckSummaryBoard& board) {
+    PrecheckSummaryDialog dialog(board, this);
+    dialog.exec();
 }
 
 void MainWindow::exportReport() {

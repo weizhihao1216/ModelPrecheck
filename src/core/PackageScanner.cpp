@@ -164,5 +164,31 @@ ModelPackageFiles PackageScanner::ScanPackageDirectory(const std::string& packag
         }
     }
 
+    const bool hasRelDll = !result.releaseDllFiles.empty();
+    const bool hasRelLib = !result.releaseLibFiles.empty();
+    const bool hasDbgDll = !result.debugDllFiles.empty();
+    const bool hasDbgLib = !result.debugLibFiles.empty();
+
+    if (hasRelDll && hasRelLib) {
+        result.scanLog.push_back(
+            "PASS: Release 可编译/链接 — 已找到 Release DLL 与 Release LIB");
+    } else if (hasRelDll) {
+        result.scanLog.push_back(
+            "WARN: Release 可加载 DLL，但缺少 Release .lib，工程链接可能失败");
+    } else if (result.modelsDirExists) {
+        result.scanLog.push_back("FAIL: 未找到 Release DLL，无法进行 Release 集成");
+    }
+
+    if (hasDbgDll && hasDbgLib) {
+        result.scanLog.push_back(
+            "PASS: Debug 可编译 — 已找到 Debug DLL 与 Debug LIB");
+    } else {
+        result.scanLog.push_back(
+            "FAIL: 无法编译 Debug 版本 — 当前 Debug DLL="
+            + std::to_string(result.debugDllFiles.size())
+            + "，Debug LIB=" + std::to_string(result.debugLibFiles.size())
+            + "。工程切到 Debug 会链接失败；请仅用 Release 集成，或向厂家索取 Debug 库。");
+    }
+
     return result;
 }

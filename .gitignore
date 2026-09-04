@@ -8,6 +8,9 @@ dist/
 x64/
 x86/
 
+# Large Microsoft installers (re-download via deploy/prerequisites/download_prerequisites.ps1)
+deploy/prerequisites/*.exe
+
 # ==========================================
 # 2. Visual Studio & MSVC Temp Files
 # ==========================================

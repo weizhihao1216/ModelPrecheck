@@ -38,7 +38,9 @@ public:
     bool LoadModelDll(const std::string& dllPath,
                       const std::vector<RandomVarDef>& randomVars,
                       std::string& error);
+    bool LoadCompiledDll(const std::string& path, std::string& error);
     void Unload();
+    void SetEnabledRandomVars(const std::vector<RandomVarDef>& vars);
     bool IsLoaded() const {
         return m_hModule != NULL
             && (m_pfnRun != nullptr
@@ -77,7 +79,6 @@ private:
                   const std::string& sourcePath,
                   const std::string& outputDll,
                   std::string& log) const;
-    bool LoadCompiledDll(const std::string& path, std::string& error);
     bool RunDirectModel(const MultiObjectTestConfig& config,
                         const RandomValueBlob& values,
                         MultiObjectTestReport& report,

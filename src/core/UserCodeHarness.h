@@ -70,6 +70,8 @@ public:
 
     bool LoadCompiledDll(const std::string& dllPath, std::string& err);
     void Unload();
+    /** Restore enabled random vars after LoadCompiledDll (e.g. session restore). */
+    void SetEnabledRandomVars(const std::vector<RandomVarDef>& vars);
 
     // Sample random values according to enabled var defs (thread-safe if each call has own rng seed)
     RandomValueBlob Sample(uint32_t seed) const;

@@ -28,15 +28,28 @@
 #include "../core/MultiObjectHarness.h"
 #include "../core/ReportGenerator.h"
 #include "../core/PackageScanner.h"
+#include "../core/PrecheckSummary.h"
 #include "../core/FleetSingleThreadMultiObjectTester.h"
+#include "../core/SessionStore.h"
 
 #include "LogConsoleWidget.h"
 #include "CppCodeEditor.h"
 
+class QSplitter;
+class QVBoxLayout;
 class ChartViewerWidget;
 class TrajectoryViewWidget;
 class BusyOverlayWidget;
 class QScrollArea;
+class QFrame;
+class QVBoxLayout;
+
+struct PageResultWidgets {
+    QFrame* frame = nullptr;
+    QLabel* status = nullptr;
+    QLabel* reason = nullptr;
+    QLabel* consequence = nullptr;
+};
 
 struct FleetModelEntry {
     QString name;
@@ -68,8 +81,12 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget* parent = nullptr);
-    ~MainWindow();
+    ~MainWindow() override;
 
+protected:
+    void closeEvent(QCloseEvent* event) override;
+
+public:
     void showBusyOverlay(const QString& text);
     void hideBusyOverlay();
     void setBusyOverlayText(const QString& text);
@@ -122,8 +139,16 @@ private slots:
 private:
     void applyDarkStyle();
     void updateStatusBadges();
+    void updateTestItemSummaryView(const PrecheckSummaryBoard& board);
+    void showPrecheckSummaryDialog(const PrecheckSummaryBoard& board);
+    void applyPageResult(PageResultWidgets& widgets, const TestItemResult* item);
+    void refreshAllPageResultPanels();
+    void refreshNavigationStatus();
+    PageResultWidgets createPageResultPanel(QWidget* parent, QVBoxLayout* layout,
+                                            const QString& title);
     void updatePeView(const PeAnalysisReport& pe);
     void updateHeaderConflictView(const HeaderConflictReport& report);
+    void fitHeaderTablesToContents();
     void updateResultTable(QTableWidget* table, const ConcurrencyTestReport& report);
     void refreshModelListUi();
     void refreshModelSelectors();
@@ -143,6 +168,9 @@ private:
     void loadEditorsFromModel(int index);
     void setEditorsEnabled(bool on);
     void setHarnessStatusText(const QString& text, const QString& tone = QString());
+    void maybeRestoreLastSession();
+    SessionSnapshot collectSessionSnapshot() const;
+    void applySessionSnapshot(const SessionSnapshot& snapshot);
     bool isModelPathValid(const FleetModelEntry& entry) const;
     bool isModelConfigured(const FleetModelEntry& entry) const;
     bool isModelCompiled(const FleetModelEntry& entry) const;
@@ -183,10 +211,12 @@ private:
     QLabel* m_lblHeaderStatus;
     QLabel* m_lblLibStatus;
     QLabel* m_lblDllStatus;
+    QLabel* m_lblBuildConfigStatus;
     QLabel* m_lblWorkflowSummary;
     std::vector<QLabel*> m_workflowSteps;
     QTabWidget* m_pCentralTabs;
     QListWidget* m_listTestNavigation;
+    QLabel* m_lblNavLegend = nullptr;
     QScrollArea* m_workflowScroll;
 
     QComboBox* m_comboHeaderModel;
@@ -250,6 +280,8 @@ private:
     QPushButton* m_btnRunTrajectory;
     QWidget* m_perfOptionsPanel;
     QWidget* m_trajectoryPanel;
+    QSplitter* m_splitterPerf = nullptr;
+    QVBoxLayout* m_layoutTabPerf = nullptr;
     QWidget* m_perfChartBottomSpacer = nullptr;
     QLabel* m_lblPerfPageHint;
     QLabel* m_lblPerfSummary;
@@ -313,6 +345,23 @@ private:
 
     // Report
     QTextBrowser* m_pReportBrowser;
+    QLabel* m_lblTestItemSummary;
+    QTableWidget* m_tblTestItemSummary;
+    PrecheckSummaryBoard m_latestSummaryBoard;
+    bool m_hasSummaryBoard = false;
+
+    PageResultWidgets m_pageResultHeader;
+    PageResultWidgets m_pageResultHeaderConflict;
+    PageResultWidgets m_pageResultLib;
+    PageResultWidgets m_pageResultBuild;
+    PageResultWidgets m_pageResultPe;
+    PageResultWidgets m_pageResultLoad;
+    PageResultWidgets m_pageResultPerf;
+    PageResultWidgets m_pageResultMemory;
+    PageResultWidgets m_pageResultTraj;
+    PageResultWidgets m_pageResultMultiModel;
+    PageResultWidgets m_pageResultMultiThread;
+    PageResultWidgets m_pageResultMultiObject;
     LogConsoleWidget* m_pLogConsole;
 
     DllLoader m_dllLoader;

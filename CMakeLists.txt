@@ -84,8 +84,12 @@ set(SOURCES
     src/core/SingleThreadMultiObjectTester.cpp
     src/core/FleetSingleThreadMultiObjectTester.h
     src/core/FleetSingleThreadMultiObjectTester.cpp
+    src/core/SessionStore.h
+    src/core/SessionStore.cpp
     src/core/ReportGenerator.h
     src/core/ReportGenerator.cpp
+    src/core/PrecheckSummary.h
+    src/core/PrecheckSummary.cpp
     src/ui/LogConsoleWidget.h
     src/ui/LogConsoleWidget.cpp
     src/ui/ChartViewerWidget.h
@@ -98,6 +102,10 @@ set(SOURCES
     src/ui/CppCodeCompletion.cpp
     src/ui/BusyOverlayWidget.h
     src/ui/BusyOverlayWidget.cpp
+    src/ui/SessionRestoreDialog.h
+    src/ui/SessionRestoreDialog.cpp
+    src/ui/PrecheckSummaryDialog.h
+    src/ui/PrecheckSummaryDialog.cpp
     src/ui/MainWindow.h
     src/ui/MainWindow.cpp
     src/resources.qrc

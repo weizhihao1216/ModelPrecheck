@@ -542,6 +542,14 @@ void UserCodeHarness::Unload() {
     SetDllDirectoryA(nullptr);
 }
 
+void UserCodeHarness::SetEnabledRandomVars(const std::vector<RandomVarDef>& vars) {
+    m_enabledVars.clear();
+    for (const auto& v : vars) {
+        if (!v.enabled || v.name.empty()) continue;
+        m_enabledVars.push_back(v);
+    }
+}
+
 RandomValueBlob UserCodeHarness::Sample(uint32_t seed) const {
     RandomValueBlob blob;
     std::mt19937 rng(seed);

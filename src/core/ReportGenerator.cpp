@@ -1,14 +1,49 @@
-#include "ReportGenerator.h"
+﻿#include "ReportGenerator.h"
+#include "PrecheckSummary.h"
 #include <fstream>
 #include <sstream>
 #include <iomanip>
 #include <chrono>
 #include <ctime>
 
+namespace {
+
+/** Shared CSS aligned with app UI (teal industrial dark). */
+const char* ReportThemeCss() {
+    return
+        "  body { font-family: 'Microsoft YaHei UI', 'Segoe UI', sans-serif; margin: 0; padding: 20px;"
+        "         background-color: #0f1419; color: #e2e8f0; }\n"
+        "  .container { max-width: 1100px; margin: 0 auto; background: #141c24; padding: 28px;"
+        "               border-radius: 10px; border: 1px solid #2d3f4f;"
+        "               box-shadow: 0 8px 24px rgba(0,0,0,0.45); }\n"
+        "  h1, h2, h3 { color: #14b8a6; border-bottom: 1px solid #2d3f4f; padding-bottom: 8px; }\n"
+        "  .muted { color: #94a3b8; font-weight: bold; }\n"
+        "  .badge { display: inline-block; padding: 6px 16px; border-radius: 16px; color: #0f1419;"
+        "           font-weight: bold; font-size: 16px; text-align: center; }\n"
+        "  table { width: 100%; border-collapse: collapse; margin: 15px 0; background: #0f1419;"
+        "          border-radius: 8px; overflow: hidden; border: 1px solid #1e2a36; }\n"
+        "  th, td { padding: 11px 14px; text-align: left; border-bottom: 1px solid #1e2a36; }\n"
+        "  th { background-color: #1a242e; color: #14b8a6; font-weight: 600; }\n"
+        "  tr:hover { background-color: #1a242e; }\n"
+        "  .pass { color: #34d399; font-weight: bold; }\n"
+        "  .warn { color: #fbbf24; font-weight: bold; }\n"
+        "  .fail { color: #f87171; font-weight: bold; }\n"
+        "  .card { background: #1a242e; padding: 15px; border-radius: 8px; margin-bottom: 15px;"
+        "          border: 1px solid #2d3f4f; }\n"
+        "  .model-section { border: 1px solid #2d3f4f; border-radius: 10px; padding: 16px;"
+        "                   margin: 24px 0; background: #0f1419; }\n"
+        "  .log-box { background: #0c1218; padding: 12px; font-family: Consolas, monospace;"
+        "             font-size: 13px; max-height: 280px; overflow-y: auto;"
+        "             border: 1px solid #2d3f4f; border-radius: 6px; color: #cbd5e1; }\n"
+        "  code { color: #2dd4bf; }\n";
+}
+
+} // namespace
+
 std::string ReportGenerator::GenerateHtml(const CombinedPrecheckReport& report) {
     std::stringstream html;
 
-    std::string badgeColor = "#a6adc8"; // gray = partial / not fully run
+    std::string badgeColor = "#64748b"; // gray = partial / not fully run
     std::string verdictText = "PARTIAL";
     const bool headerRanTop = !report.headerPath.empty();
     const bool libRanTop = !report.libPath.empty();
@@ -31,14 +66,14 @@ std::string ReportGenerator::GenerateHtml(const CombinedPrecheckReport& report) 
         if (report.multiThreadReport.verdict == "FAIL") anyFail = true;
         if (report.multiModelReport.verdict == "FAIL") anyFail = true;
         if (anyFail) {
-            badgeColor = "#f38ba8";
+            badgeColor = "#f87171";
             verdictText = "FAIL";
         } else {
-            badgeColor = "#a6e3a1";
+            badgeColor = "#34d399";
             verdictText = "PASS";
         }
         if (perfRanTop && report.perfReport.realtimeVerdict == "WARNING" && verdictText != "FAIL") {
-            badgeColor = "#f9e2af";
+            badgeColor = "#fbbf24";
             verdictText = "WARNING";
         }
     } else {
@@ -48,28 +83,14 @@ std::string ReportGenerator::GenerateHtml(const CombinedPrecheckReport& report) 
     html << "<!DOCTYPE html>\n<html>\n<head>\n"
          << "<meta charset=\"utf-8\">\n"
          << "<title>第三方武器模型DLL集成预检报告</title>\n"
-         << "<style>\n"
-         << "  body { font-family: 'Segoe UI', Microsoft YaHei, sans-serif; margin: 0; padding: 20px; background-color: #1e1e2e; color: #cdd6f4; }\n"
-         << "  .container { max-width: 1000px; margin: 0 auto; background: #181825; padding: 30px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }\n"
-         << "  h1, h2, h3 { color: #89b4fa; border-bottom: 1px solid #313244; padding-bottom: 8px; }\n"
-         << "  .badge { display: inline-block; padding: 6px 16px; border-radius: 20px; color: #11111b; font-weight: bold; font-size: 18px; text-align: center; }\n"
-         << "  table { width: 100%; border-collapse: collapse; margin: 15px 0; background: #11111b; border-radius: 8px; overflow: hidden; }\n"
-         << "  th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #313244; }\n"
-         << "  th { background-color: #313244; color: #89b4fa; font-weight: 600; }\n"
-         << "  tr:hover { background-color: #1e1e2e; }\n"
-         << "  .pass { color: #a6e3a1; font-weight: bold; }\n"
-         << "  .warn { color: #f9e2af; font-weight: bold; }\n"
-         << "  .fail { color: #f38ba8; font-weight: bold; }\n"
-         << "  .card { background: #313244; padding: 15px; border-radius: 8px; margin-bottom: 15px; }\n"
-         << "  .log-box { background: #11111b; padding: 12px; font-family: Consolas, monospace; font-size: 13px; max-height: 250px; overflow-y: auto; border: 1px solid #45475a; border-radius: 6px; }\n"
-         << "</style>\n</head>\n<body>\n";
+         << "<style>\n" << ReportThemeCss() << "</style>\n</head>\n<body>\n";
 
     html << "<div class=\"container\">\n"
          << "  <div style=\"display: flex; justify-content: space-between; align-items: center;\">\n"
          << "    <div>\n"
          << "      <h1>第三方武器模型 DLL 集成预检报告</h1>\n"
-         << "      <p style=\"color: #a6adc8;\">目标文件: <code>" << report.dllPath << "</code></p>\n"
-         << "      <p style=\"color: #a6adc8;\">生成时间: " << report.timestamp << "</p>\n"
+         << "      <p class=\"muted\">目标文件: <code>" << report.dllPath << "</code></p>\n"
+         << "      <p class=\"muted\">生成时间: " << report.timestamp << "</p>\n"
          << "    </div>\n"
          << "    <div>\n"
          << "      <span class=\"badge\" style=\"background-color: " << badgeColor << ";\">" << verdictText << "</span>\n"
@@ -332,35 +353,21 @@ bool ReportGenerator::SaveReportToFile(const CombinedPrecheckReport& report, con
 std::string ReportGenerator::GenerateDualBuildHtml(const DualBuildPrecheckReport& dualReport) {
     std::stringstream html;
 
-    std::string badgeColor = dualReport.overallPass ? "#a6e3a1" : "#f38ba8";
+    std::string badgeColor = dualReport.overallPass ? "#34d399" : "#f87171";
     std::string verdictText = dualReport.overallPass ? "PASS" : "FAIL";
 
     html << "<!DOCTYPE html>\n<html>\n<head>\n"
          << "<meta charset=\"utf-8\">\n"
          << "<title>三方武器模型库 Release & Debug 双版本集成预检报告</title>\n"
-         << "<style>\n"
-         << "  body { font-family: 'Segoe UI', Microsoft YaHei, sans-serif; margin: 0; padding: 20px; background-color: #1e1e2e; color: #cdd6f4; }\n"
-         << "  .container { max-width: 1050px; margin: 0 auto; background: #181825; padding: 30px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }\n"
-         << "  h1, h2, h3 { color: #89b4fa; border-bottom: 1px solid #313244; padding-bottom: 8px; }\n"
-         << "  .badge { display: inline-block; padding: 6px 16px; border-radius: 20px; color: #11111b; font-weight: bold; font-size: 18px; text-align: center; }\n"
-         << "  table { width: 100%; border-collapse: collapse; margin: 15px 0; background: #11111b; border-radius: 8px; overflow: hidden; }\n"
-         << "  th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #313244; }\n"
-         << "  th { background-color: #313244; color: #89b4fa; font-weight: 600; }\n"
-         << "  tr:hover { background-color: #1e1e2e; }\n"
-         << "  .pass { color: #a6e3a1; font-weight: bold; }\n"
-         << "  .warn { color: #f9e2af; font-weight: bold; }\n"
-         << "  .fail { color: #f38ba8; font-weight: bold; }\n"
-         << "  .card { background: #313244; padding: 15px; border-radius: 8px; margin-bottom: 15px; }\n"
-         << "  .log-box { background: #11111b; padding: 12px; font-family: Consolas, monospace; font-size: 13px; max-height: 250px; overflow-y: auto; border: 1px solid #45475a; border-radius: 6px; }\n"
-         << "</style>\n</head>\n<body>\n";
+         << "<style>\n" << ReportThemeCss() << "</style>\n</head>\n<body>\n";
 
     html << "<div class=\"container\">\n"
          << "  <div style=\"display: flex; justify-content: space-between; align-items: center;\">\n"
          << "    <div>\n"
          << "      <h1>三方武器模型包 (Release & Debug 双版本) 预检报告</h1>\n"
-         << "      <p style=\"color: #a6adc8;\">型号: <b>" << (dualReport.modelName.empty() ? "(未命名)" : dualReport.modelName) << "</b></p>\n"
-         << "      <p style=\"color: #a6adc8;\">模型包路径: <code>" << dualReport.packageDir << "</code></p>\n"
-         << "      <p style=\"color: #a6adc8;\">生成时间: " << dualReport.timestamp << "</p>\n"
+         << "      <p class=\"muted\">型号: <b>" << (dualReport.modelName.empty() ? "(未命名)" : dualReport.modelName) << "</b></p>\n"
+         << "      <p class=\"muted\">模型包路径: <code>" << dualReport.packageDir << "</code></p>\n"
+         << "      <p class=\"muted\">生成时间: " << dualReport.timestamp << "</p>\n"
          << "    </div>\n"
          << "    <div>\n"
          << "      <span class=\"badge\" style=\"background-color: " << badgeColor << ";\">" << verdictText << "</span>\n"
@@ -543,7 +550,7 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
     if (multiObjectRan && multiObjectPassed < multiObjectTested) anyFail = true;
     if (!fleetReport.overallPass && peRan) anyFail = true;
 
-    std::string badgeColor = anyFail ? "#f38ba8" : (packageRan || perfRan || multiModelRan || multiThreadRan || multiObjectRan ? "#a6e3a1" : "#a6adc8");
+    std::string badgeColor = anyFail ? "#f87171" : (packageRan || perfRan || multiModelRan || multiThreadRan || multiObjectRan ? "#34d399" : "#64748b");
     std::string verdictText = anyFail ? "FAIL" : (packageRan || perfRan || multiModelRan || multiThreadRan || multiObjectRan ? "PASS" : "N/A");
 
     auto statusCell = [](bool ran, bool pass) -> std::string {
@@ -554,33 +561,23 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
     html << "<!DOCTYPE html>\n<html>\n<head>\n"
          << "<meta charset=\"utf-8\">\n"
          << "<title>多型号武器模型预检总报告</title>\n"
-         << "<style>\n"
-         << "  body { font-family: 'Segoe UI', Microsoft YaHei, sans-serif; margin: 0; padding: 20px; background-color: #1e1e2e; color: #cdd6f4; }\n"
-         << "  .container { max-width: 1100px; margin: 0 auto; background: #181825; padding: 30px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }\n"
-         << "  h1, h2, h3 { color: #89b4fa; border-bottom: 1px solid #313244; padding-bottom: 8px; }\n"
-         << "  .badge { display: inline-block; padding: 6px 16px; border-radius: 20px; color: #11111b; font-weight: bold; font-size: 18px; }\n"
-         << "  table { width: 100%; border-collapse: collapse; margin: 15px 0; background: #11111b; border-radius: 8px; overflow: hidden; }\n"
-         << "  th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #313244; }\n"
-         << "  th { background-color: #313244; color: #89b4fa; font-weight: 600; }\n"
-         << "  .pass { color: #a6e3a1; font-weight: bold; }\n"
-         << "  .fail { color: #f38ba8; font-weight: bold; }\n"
-         << "  .warn { color: #f9e2af; font-weight: bold; }\n"
-         << "  .card { background: #313244; padding: 15px; border-radius: 8px; margin-bottom: 15px; }\n"
-         << "  .model-section { border: 1px solid #45475a; border-radius: 10px; padding: 16px; margin: 24px 0; background: #1e1e2e; }\n"
-         << "  .log-box { background: #11111b; padding: 12px; font-family: Consolas, monospace; font-size: 13px; max-height: 320px; overflow-y: auto; border: 1px solid #45475a; border-radius: 6px; }\n"
-         << "</style>\n</head>\n<body>\n<div class=\"container\">\n";
+         << "<style>\n" << ReportThemeCss() << "</style>\n</head>\n<body>\n<div class=\"container\">\n";
 
     html << "  <div style=\"display:flex;justify-content:space-between;align-items:center;\">\n"
          << "    <div>\n"
          << "      <h1>多型号武器模型预检总报告</h1>\n"
-         << "      <p style=\"color:#a6adc8;\">型号数量: " << fleetReport.modelReports.size() << "</p>\n"
-         << "      <p style=\"color:#a6adc8;\">生成时间: " << fleetReport.timestamp << "</p>\n"
+         << "      <p class=\"muted\">型号数量: " << fleetReport.modelReports.size() << "</p>\n"
+         << "      <p class=\"muted\">生成时间: " << fleetReport.timestamp << "</p>\n"
          << "    </div>\n"
          << "    <span class=\"badge\" style=\"background-color:" << badgeColor << ";\">" << verdictText << "</span>\n"
          << "  </div>\n\n";
 
-    // —— 综合判定矩阵（与单报告一致，始终存在）——
-    html << "  <h2>1. 预检综合判定矩阵</h2>\n"
+    // —— 1. 测试项总览（含 Release/Debug 构建产物；型号总览仍保留 Release/Debug 列）——
+    const PrecheckSummaryBoard board = PrecheckSummary::BuildFromFleet(fleetReport);
+    html << PrecheckSummary::ToHtmlSection(board, true);
+
+    // —— 2. 综合判定矩阵 ——
+    html << "  <h2>2. 预检综合判定矩阵</h2>\n"
          << "  <table>\n"
          << "    <tr><th>测试维度</th><th>关键指标</th><th>测试结果</th><th>判定状态</th></tr>\n";
 
@@ -679,19 +676,50 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
     html
          << "  </table>\n\n";
 
-    html << "  <h2>2. 型号总览</h2>\n  <table>\n"
-         << "    <tr><th>型号</th><th>路径</th><th>头文件通过</th><th>LIB 通过</th><th>DLL 通过</th><th>判定</th></tr>\n";
-    for (const auto& m : fleetReport.modelReports) {
-        html << "    <tr><td>" << (m.modelName.empty() ? "-" : m.modelName) << "</td>"
+    html << "  <h2>3. 型号总览</h2>\n  <table>\n"
+         << "    <tr><th>序号</th><th>型号</th><th>路径</th>"
+            "<th>Release</th><th>Debug</th>"
+            "<th>头文件通过</th><th>LIB 通过</th><th>DLL 通过</th><th>判定</th></tr>\n";
+    for (size_t mi = 0; mi < fleetReport.modelReports.size(); ++mi) {
+        const auto& m = fleetReport.modelReports[mi];
+        std::string releaseCell = "—";
+        std::string debugCell = "—";
+        std::string releaseCls = "warn";
+        std::string debugCls = "warn";
+        std::string buildTip;
+        if (mi < board.buildConfigs.size()) {
+            const auto& cap = board.buildConfigs[mi];
+            releaseCell = cap.releaseVerdict;
+            debugCell = cap.debugVerdict;
+            releaseCls = (cap.releaseVerdict == "PASS" ? "pass"
+                          : (cap.releaseVerdict == "WARN" ? "warn" : "fail"));
+            debugCls = (cap.debugVerdict == "PASS" ? "pass" : "fail");
+            buildTip = cap.releaseSummary + "；" + cap.debugSummary;
+            for (char& ch : buildTip) {
+                if (ch == '"') ch = '\'';
+                if (ch == '<') ch = ' ';
+                if (ch == '>') ch = ' ';
+            }
+        }
+        html << "    <tr><td>" << (mi + 1) << "</td>"
+             << "<td>" << (m.modelName.empty() ? "-" : m.modelName) << "</td>"
              << "<td><code>" << m.packageDir << "</code></td>"
+             << "<td class=\"" << releaseCls << "\" title=\"" << buildTip << "\">"
+             << releaseCell << "</td>"
+             << "<td class=\"" << debugCls << "\" title=\"" << buildTip << "\">"
+             << debugCell << "</td>"
              << "<td>" << m.passedHeaderCount << "/" << m.headerReports.size() << "</td>"
              << "<td>" << m.passedLibCount << "/" << m.libReports.size() << "</td>"
              << "<td>" << m.passedDllCount << "/" << m.dllReports.size() << "</td>"
              << "<td class=\"" << (m.overallPass ? "pass\">PASS" : "fail\">FAIL") << "</td></tr>\n";
     }
-    html << "  </table>\n\n";
+    html << "  </table>\n"
+         << "  <p class=\"muted\" style=\"font-size:13px;\">"
+            "Release / Debug 列为该型号包产物可编译性："
+            "Debug=FAIL 表示无法编译 Debug 版本（工程切 Debug 会链接失败，仅能按 Release 集成）。"
+            "</p>\n\n";
 
-    html << "  <h2>3. 头文件规范检查结果</h2>\n"
+    html << "  <h2>4. 头文件规范检查结果</h2>\n"
          << "  <table><tr><th>型号</th><th>头文件</th><th>编码</th><th>extern \"C\"</th><th>判定</th></tr>\n";
     for (const auto& m : fleetReport.modelReports) {
         for (const auto& header : m.headerReports) {
@@ -722,7 +750,7 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
     if (conflictRows == 0) html << "  <tr><td colspan=\"6\">未发现冲突或污染风险</td></tr>\n";
     html << "  </table>\n\n";
 
-    html << "  <h2>4. LIB 库文件检查结果</h2>\n"
+    html << "  <h2>5. LIB 库文件检查结果</h2>\n"
          << "  <table><tr><th>型号</th><th>LIB 文件</th><th>架构</th><th>库类型</th><th>判定</th></tr>\n";
     for (const auto& m : fleetReport.modelReports) {
         for (const auto& lib : m.libReports) {
@@ -736,7 +764,7 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
     html << "  </table>\n\n";
 
     // 按型号划分：DLL 文件结构与依赖
-    html << "  <h2>5. DLL 文件与依赖检查</h2>\n";
+    html << "  <h2>6. DLL 文件与依赖检查</h2>\n";
     for (size_t i = 0; i < fleetReport.modelReports.size(); ++i) {
         const auto& m = fleetReport.modelReports[i];
         html << "  <div class=\"model-section\">\n"
@@ -769,7 +797,7 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
         html << "  </div>\n";
     }
 
-    html << "  <h2>6. DLL 接口与加载检查</h2>\n";
+    html << "  <h2>7. DLL 接口与加载检查</h2>\n";
     for (const auto& m : fleetReport.modelReports) {
         html << "  <div class=\"model-section\">\n"
              << "    <h3>型号: " << (m.modelName.empty() ? "(未命名)" : m.modelName) << "</h3>\n";
@@ -796,7 +824,7 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
     }
 
     // 7. 性能压测明细
-    html << "  <h2>7. 性能与内存压力（UserMain 重复执行）</h2>\n"
+    html << "  <h2>8. 性能与内存压力（UserMain 重复执行）</h2>\n"
          << "  <div class=\"card\">\n";
     if (!perfRan) {
         html << "    <p class=\"warn\">未执行压测</p>\n";
@@ -855,12 +883,12 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
         }
     };
 
-    emitConcSection("8. 多型号并行（多路径 DLL × 各型号数量）",
+    emitConcSection("9. 多型号并行（多路径 DLL × 各型号数量）",
                     fleetReport.multiModelReport, multiModelRan);
-    emitConcSection("9. 多线程稳定性（并行 UserMain）",
+    emitConcSection("10. 多线程稳定性（并行 UserMain）",
                     fleetReport.multiThreadReport, multiThreadRan);
 
-    html << "  <h2>10. 单线程多对象基线/交错测试</h2>\n";
+    html << "  <h2>11. 单线程多对象基线/交错测试</h2>\n";
     if (fleetReport.multiObjectReports.empty()) {
         html << "  <div class=\"card\"><p class=\"warn\">未完成多对象接口映射</p></div>\n";
     }
@@ -913,7 +941,7 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
         html << "  </div>\n";
     }
 
-    html << "  <h2>10b. 跨型号单线程对象交错</h2>\n";
+    html << "  <h2>12. 跨型号单线程对象交错</h2>\n";
     {
         const auto& fleetMo = fleetReport.fleetMultiObjectReport;
         if (fleetMo.verdict.empty()) {
@@ -947,7 +975,7 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
     }
 
     // 11. 日志
-    html << "  <h2>11. 预检过程日志追踪</h2>\n"
+    html << "  <h2>13. 预检过程日志追踪</h2>\n"
          << "  <div class=\"log-box\">\n";
     bool anyLog = false;
     for (const auto& m : fleetReport.modelReports) {

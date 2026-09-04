@@ -51,6 +51,12 @@ struct DualBuildPrecheckReport {
     std::string timestamp;
     ModelPackageFiles packageFiles;
 
+    /// Release/Debug 产物是否齐全（对照「编译 Debug 报错、Release 成功」）
+    bool releaseBuildOk = false;
+    bool debugBuildOk = false;
+    std::string releaseBuildSummary;
+    std::string debugBuildSummary;
+
     std::vector<HeaderAnalysisReport> headerReports;
     std::vector<LibAnalysisReport> libReports;
     std::vector<CombinedPrecheckReport> dllReports;

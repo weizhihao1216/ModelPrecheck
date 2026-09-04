@@ -1303,6 +1303,13 @@ void MultiObjectHarness::Unload() {
     SetDllDirectoryA(nullptr);
 }
 
+void MultiObjectHarness::SetEnabledRandomVars(const std::vector<RandomVarDef>& vars) {
+    m_enabledVars.clear();
+    for (const auto& variable : vars)
+        if (variable.enabled && !variable.name.empty())
+            m_enabledVars.push_back(variable);
+}
+
 RandomValueBlob MultiObjectHarness::Sample(uint32_t seed, int objectCount) const {
     RandomValueBlob blob;
     if (objectCount < 1) objectCount = 1;

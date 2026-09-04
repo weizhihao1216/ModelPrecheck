@@ -3037,6 +3037,25 @@ QLabel[pathStageStatus="true"][pathValid="true"] {
     background-color: #134e4a;
     color: #a7f3d0;
 }
+
+/* 各导航页：测试结果 / 原因 / 可能导致 */
+QFrame[pageResultPanel="true"] {
+    background-color: #141c24;
+    border: 1px solid #2d3f4f;
+    border-radius: 6px;
+    margin-top: 2px;
+    margin-bottom: 4px;
+}
+QFrame[pageResultPanel="true"] QLabel {
+    color: #cbd5e1;
+    font-family: "Microsoft YaHei UI";
+    font-size: 12px;
+}
+QFrame[pageResultPanel="true"] QLabel[sectionTitle="true"] {
+    color: #14b8a6;
+    font-weight: bold;
+    font-size: 12px;
+}
 QLabel[sectionTitle="true"] {
     color: #14b8a6;
     font-weight: bold;
@@ -3180,17 +3199,24 @@ QListWidget[testNavigation="true"]::item {
     min-height: 38px;
     padding: 7px 8px;
     margin: 2px;
-    color: #e2e8f0;
+    font-weight: bold;
+    /* color left to item foreground for pass/fail status */
     border-left: 3px solid transparent;
 }
 QListWidget[testNavigation="true"]::item:hover {
     background-color: #1e3a34;
     border-left-color: #14b8a6;
+    color: #ffffff;
 }
 QListWidget[testNavigation="true"]::item:selected {
     background-color: #134e4a;
-    color: #ffffff;
     border-left-color: #2dd4bf;
+    color: #ffffff;
+}
+QListWidget[testNavigation="true"]::item:selected:hover {
+    background-color: #0f766e;
+    border-left-color: #2dd4bf;
+    color: #ffffff;
 }
 QTabWidget::pane {
     background-color: #141c24;
@@ -3254,12 +3280,28 @@ QTableView::indicator:checked, QTreeView::indicator:checked {
 QPushButton:hover, QToolButton:hover, QComboBox:hover, QSpinBox:hover,
 QDoubleSpinBox:hover, QDateTimeEdit:hover, QDateEdit:hover,
 QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover,
-QListWidget::item:hover, QTreeView::item:hover,
+QTreeView::item:hover,
 QHeaderView::section:hover,
 QScrollBar::handle:hover, QSplitter::handle:hover {
     background-color: #fbbf24;
     color: #1c1917;
     border-color: #fbbf24;
+}
+/* 功能导航：悬浮/选中文字白色 */
+QListWidget[testNavigation="true"]::item:hover {
+    background-color: #1e3a34;
+    border-left-color: #14b8a6;
+    color: #ffffff;
+}
+QListWidget[testNavigation="true"]::item:selected {
+    background-color: #134e4a;
+    border-left-color: #2dd4bf;
+    color: #ffffff;
+}
+QListWidget[testNavigation="true"]::item:selected:hover {
+    background-color: #0f766e;
+    border-left-color: #2dd4bf;
+    color: #ffffff;
 }
 QTableWidget::item:hover, QTableView::item:hover {
     background-color: #1e3a34;
@@ -3278,16 +3320,16 @@ QListWidget[testNavigation="true"]::item {
     min-height: 32px;
     padding: 5px 7px;
     margin: 0;
-    color: #e2e8f0;
     font-size: 12px;
+    font-weight: bold;
     border-left: 3px solid transparent;
     border-bottom: 1px solid #2d3f4f;
 }
 QListWidget[testNavigation="true"]::item:hover {
-    background-color: #fbbf24;
-    color: #1c1917;
-    border-left-color: #fbbf24;
-    border-bottom-color: #fbbf24;
+    background-color: #1e3a34;
+    border-left-color: #14b8a6;
+    border-bottom-color: #2dd4bf;
+    color: #ffffff;
 }
 
 /* UserMain 页：Harness 状态单行定高；随机变量表行高固定 */
