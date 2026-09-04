@@ -1,5 +1,0 @@
-add_library(StandardWeapon SHARED standard_weapon.cpp)
-target_compile_definitions(StandardWeapon PRIVATE WEAPON_EXPORTS)
-if(MSVC)
-    target_compile_options(StandardWeapon PRIVATE /utf-8)
-endif()

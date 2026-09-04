@@ -40,6 +40,41 @@ void pushItem(PrecheckSummaryBoard& board, TestItemResult item) {
     board.items.push_back(std::move(item));
 }
 
+void normalizeItemDefaults(TestItemResult& item) {
+    if (item.reason.empty()) {
+        switch (item.state) {
+        case TestItemState::Pass: item.reason = "检查通过"; break;
+        case TestItemState::NotRun: item.reason = "尚未执行该项检测"; break;
+        case TestItemState::Skipped: item.reason = "条件不足，已跳过"; break;
+        default: break;
+        }
+    }
+    if (item.consequence.empty()) {
+        switch (item.state) {
+        case TestItemState::Pass:
+            item.consequence = "该项对集成无明显额外风险";
+            break;
+        case TestItemState::NotRun:
+        case TestItemState::Skipped:
+            item.consequence = "尚未覆盖，集成时风险未知，建议补测";
+            break;
+        case TestItemState::Fail:
+            item.consequence = "可能导致集成失败或运行时异常";
+            break;
+        case TestItemState::Warn:
+            item.consequence = "存在隐患，建议修复后再集成";
+            break;
+        }
+    }
+}
+
+void recountBoard(PrecheckSummaryBoard& board) {
+    board.passCount = board.failCount = board.warnCount = 0;
+    board.notRunCount = board.skippedCount = 0;
+    for (const auto& item : board.items)
+        tally(board, item.state);
+}
+
 } // namespace
 
 const TestItemResult* PrecheckSummaryBoard::findById(const std::string& id) const {
@@ -47,6 +82,47 @@ const TestItemResult* PrecheckSummaryBoard::findById(const std::string& id) cons
         if (item.id == id) return &item;
     }
     return nullptr;
+}
+
+PrecheckSummaryBoard PrecheckSummary::MakeSkeletonBoard() {
+    PrecheckSummaryBoard board;
+    const char* ids[][2] = {
+        {"build_config", "Release / Debug 构建产物"},
+        {"header", "头文件规范检查"},
+        {"header_conflict", "跨型号头文件冲突"},
+        {"lib", "LIB 库文件检查"},
+        {"dll_pe", "DLL 文件与依赖检查"},
+        {"dll_load", "DLL 接口与加载检查"},
+        {"perf", "UserMain 性能压测"},
+        {"memory", "内存泄漏监测"},
+        {"trajectory", "运行轨迹检查"},
+        {"multimodel", "多型号并行"},
+        {"multithread", "多线程稳定性"},
+        {"multiobject", "单线程多对象"},
+    };
+    for (const auto& row : ids) {
+        TestItemResult item;
+        item.id = row[0];
+        item.name = row[1];
+        item.state = TestItemState::NotRun;
+        pushItem(board, item);
+    }
+    return board;
+}
+
+void PrecheckSummary::UpsertItem(PrecheckSummaryBoard& board, TestItemResult item) {
+    normalizeItemDefaults(item);
+    bool replaced = false;
+    for (auto& existing : board.items) {
+        if (existing.id == item.id) {
+            existing = std::move(item);
+            replaced = true;
+            break;
+        }
+    }
+    if (!replaced)
+        board.items.push_back(std::move(item));
+    recountBoard(board);
 }
 
 BuildConfigCapability PrecheckSummary::EvaluateBuildConfig(const ModelPackageFiles& pkg,

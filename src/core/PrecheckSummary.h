@@ -59,6 +59,10 @@ public:
     static BuildConfigCapability EvaluateBuildConfig(const ModelPackageFiles& pkg,
                                                      const std::string& modelName = {});
     static PrecheckSummaryBoard BuildFromFleet(const FleetSessionReport& fleet);
+    /** Empty board with all known test ids in NotRun — for incremental single-item updates. */
+    static PrecheckSummaryBoard MakeSkeletonBoard();
+    /** Insert or replace one item and recount pass/fail/warn totals. */
+    static void UpsertItem(PrecheckSummaryBoard& board, TestItemResult item);
     static std::string StateLabel(TestItemState state);
     static std::string StateCssClass(TestItemState state);
     static std::string ToHtmlSection(const PrecheckSummaryBoard& board,

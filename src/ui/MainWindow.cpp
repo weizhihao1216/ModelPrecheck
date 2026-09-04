@@ -242,34 +242,50 @@ MainWindow::MainWindow(QWidget* parent)
     }
     m_listTestNavigation->setProperty("testNavigation", true);
 
-    m_lblNavLegend = new QLabel(grpNavigation);
-    m_lblNavLegend->setObjectName(QStringLiteral("navStatusLegend"));
-    m_lblNavLegend->setWordWrap(true);
-    m_lblNavLegend->setTextFormat(Qt::RichText);
-    m_lblNavLegend->setText(
-        QStringLiteral("<div style='text-align:center;line-height:1.35;margin:0;padding:0;'>"
-                       "<span style='color:#34d399;font-size:13px;'>●</span>"
-                       "<span style='color:#ffffff;font-weight:bold;font-size:13px;'> 通过</span>"
-                       "&nbsp;&nbsp;"
-                       "<span style='color:#f87171;font-size:13px;'>●</span>"
-                       "<span style='color:#ffffff;font-weight:bold;font-size:13px;'> 未通过</span>"
-                       "<br/>"
-                       "<span style='color:#fbbf24;font-size:13px;'>●</span>"
-                       "<span style='color:#ffffff;font-weight:bold;font-size:13px;'> 警告</span>"
-                       "&nbsp;&nbsp;"
-                       "<span style='color:#94a3b8;font-size:13px;'>●</span>"
-                       "<span style='color:#ffffff;font-weight:bold;font-size:13px;'> 未测试</span>"
-                       "</div>"));
-    m_lblNavLegend->setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
-    m_lblNavLegend->setStyleSheet(
-        QStringLiteral("QLabel#navStatusLegend {"
-                       "  color: #ffffff;"
-                       "  font-size: 13px;"
-                       "  padding: 0px 4px 4px 4px;"
-                       "  margin: 0px;"
-                       "  border-bottom: 1px solid #2d3f4f;"
-                       "}"));
-    navigationLayout->addWidget(m_lblNavLegend, 0);
+    // Status legend: white labels with colored underlines (no dots, no bottom gap).
+    // Left / middle / right horizontal gaps are equal; columns share width evenly.
+    auto* legendHost = new QWidget(grpNavigation);
+    legendHost->setObjectName(QStringLiteral("navStatusLegend"));
+    legendHost->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
+    auto* legendGrid = new QGridLayout(legendHost);
+    const int hGap = 8;
+    legendGrid->setContentsMargins(hGap, 0, hGap, 0);
+    legendGrid->setHorizontalSpacing(hGap);
+    legendGrid->setVerticalSpacing(2);
+    legendGrid->setColumnStretch(0, 1);
+    legendGrid->setColumnStretch(1, 1);
+
+    auto addLegendItem = [&](int row, int col, const QString& text, const QString& lineColor) {
+        auto* cell = new QWidget(legendHost);
+        cell->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
+        auto* cellLay = new QVBoxLayout(cell);
+        cellLay->setContentsMargins(0, 0, 0, 0);
+        cellLay->setSpacing(0);
+        auto* lbl = new QLabel(text, cell);
+        lbl->setAlignment(Qt::AlignHCenter | Qt::AlignBottom);
+        lbl->setStyleSheet(QStringLiteral(
+            "QLabel { color: #ffffff; font-weight: bold; font-size: 13px;"
+            " padding: 0; margin: 0; }"));
+        lbl->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
+        auto* line = new QFrame(cell);
+        line->setFrameShape(QFrame::NoFrame);
+        line->setFixedHeight(2);
+        line->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        line->setStyleSheet(QStringLiteral(
+            "QFrame { background-color: %1; border: none; margin: 0; padding: 0; }")
+                                .arg(lineColor));
+        cellLay->addWidget(lbl, 0);
+        cellLay->addWidget(line, 0);
+        legendGrid->addWidget(cell, row, col);
+    };
+    addLegendItem(0, 0, QStringLiteral("通过"), QStringLiteral("#34d399"));
+    addLegendItem(0, 1, QStringLiteral("未通过"), QStringLiteral("#f87171"));
+    addLegendItem(1, 0, QStringLiteral("警告"), QStringLiteral("#fbbf24"));
+    addLegendItem(1, 1, QStringLiteral("未测试"), QStringLiteral("#94a3b8"));
+
+    m_lblNavLegend = nullptr; // replaced by legendHost widget
+    navigationLayout->setSpacing(0);
+    navigationLayout->addWidget(legendHost, 0);
     navigationLayout->addWidget(m_listTestNavigation, 1);
     refreshNavigationStatus();
 
@@ -1054,9 +1070,13 @@ MainWindow::MainWindow(QWidget* parent)
         QStringLiteral("测试工作区（请从左侧“测试导航”选择）"), m_testSection);
     m_testSectionTitle->setProperty("pageSectionTitle", true);
     testSectionLayout->addWidget(m_testSectionTitle);
-    m_pCentralTabs->setMinimumHeight(780);
+    // Cap 测试工作区 height; content scrolls inside workflow when taller.
+    m_pCentralTabs->setMinimumHeight(480);
+    m_pCentralTabs->setMaximumHeight(1500);
     m_pCentralTabs->tabBar()->hide();
     testSectionLayout->addWidget(m_pCentralTabs);
+    m_testSection->setMaximumHeight(1500);
+    m_testSection->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
 
     workflowPageLayout->addWidget(m_emptyWorkflowPanel);
     workflowPageLayout->addWidget(m_modelSetupPanel);
@@ -2632,11 +2652,8 @@ void MainWindow::loadMultiObjectEditor(int modelIndex) {
     }
     m_editUserMultiObject->setPlainText(entry.userMultiObjectBody);
     m_spnMultiObjectCount->setValue(entry.multiObjectCount);
-    m_spnMultiObjectSteps->setValue(entry.multiObjectSteps);
-    m_spnMultiObjectDt->setValue(entry.multiObjectDt);
-    m_spnMultiObjectTolerance->setValue(entry.multiObjectTolerance);
-    m_comboMultiObjectSchedule->setCurrentIndex(
-        m_comboMultiObjectSchedule->findData(static_cast<int>(entry.multiObjectSchedule)));
+    // 步数 / 步长 / 容差 / 调度为页面共享参数：切换「型号」不得改写，
+    // 否则同一套跨型号交错会因选中 A/B 不同而跑出圈 vs 短线等不同轨迹。
     if (entry.multiObjectHarness && entry.multiObjectHarness->IsLoaded()) {
         m_lblMultiObjectAdapterStatus->setText(
             QStringLiteral("状态: 多对象 Harness 已加载 — %1")
@@ -3299,6 +3316,27 @@ void MainWindow::runMultiObjectTest() {
     }
     if (!replaced) m_latestFleetReport.multiObjectReports.push_back(named);
     refreshReportBrowser();
+
+    {
+        TestItemResult item;
+        item.id = "multiobject";
+        item.name = "单线程多对象";
+        if (entry.multiObjectReport.verdict == "PASS") {
+            item.state = TestItemState::Pass;
+            item.reason = entry.multiObjectReport.summary.empty()
+                ? "单线程多对象测试通过" : entry.multiObjectReport.summary;
+        } else if (entry.multiObjectReport.verdict == "WARNING") {
+            item.state = TestItemState::Warn;
+            item.reason = entry.multiObjectReport.summary;
+            item.consequence = "同一武器多枚实例可能存在轻微偏差";
+        } else {
+            item.state = TestItemState::Fail;
+            item.reason = entry.multiObjectReport.summary.empty()
+                ? "单线程多对象测试失败" : entry.multiObjectReport.summary;
+            item.consequence = "同一武器发射多枚时崩溃或状态互相干扰";
+        }
+        upsertSummaryItem(item);
+    }
 }
 
 void MainWindow::updateMultiObjectResultView(const MultiObjectTestReport& report) {
@@ -3474,6 +3512,7 @@ void MainWindow::updateFleetMultiObjectResultView(const FleetMultiObjectTestRepo
 
 void MainWindow::runFleetMultiObjectTest() {
     saveMultiObjectEditor();
+    // 跨型号交错使用页面上当前的共享步数/步长/调度，与上方「型号」下拉无关。
     FleetMultiObjectTestConfig config;
     config.stepCount = m_spnMultiObjectSteps->value();
     config.stepDt = m_spnMultiObjectDt->value();
@@ -3901,6 +3940,13 @@ void MainWindow::runHeaderCheckOnly() {
     const QString path = m_comboHeaderFile->currentData().toString();
     if (path.isEmpty()) {
         m_lblHeaderResult->setText(QStringLiteral("检查结果: 当前型号包中未找到头文件"));
+        TestItemResult item;
+        item.id = "header";
+        item.name = "头文件规范检查";
+        item.state = TestItemState::Warn;
+        item.reason = "当前型号包中未找到头文件";
+        item.consequence = "无法核对接口声明，后续编译与符号一致性风险升高";
+        upsertSummaryItem(item);
         return;
     }
     if (!m_showSingleItemReport) m_latestReport = CombinedPrecheckReport();
@@ -3933,12 +3979,47 @@ void MainWindow::runHeaderCheckOnly() {
     updateHeaderConflictView(m_latestReport.headerConflictReport);
     refreshReportBrowser();
     logMessage(QStringLiteral("SUCCESS: 头文件规范检查完成：%1").arg(path));
+
+    {
+        TestItemResult item;
+        item.id = "header";
+        item.name = "头文件规范检查";
+        item.state = report.overallPass ? TestItemState::Pass : TestItemState::Fail;
+        item.reason = report.overallPass
+            ? ("头文件规范通过（编码=" + report.encoding + "）")
+            : "存在编码、extern \"C\" 或导出声明问题";
+        item.consequence = report.overallPass
+            ? "该项对集成无明显额外风险"
+            : "编译失败、C++ 名字修饰不匹配或接口无法正确导出";
+        upsertSummaryItem(item);
+    }
+    {
+        const auto& conflict = m_latestReport.headerConflictReport;
+        TestItemResult item;
+        item.id = "header_conflict";
+        item.name = "跨型号头文件冲突";
+        item.state = conflict.overallPass ? TestItemState::Pass : TestItemState::Fail;
+        item.reason = conflict.overallPass
+            ? "当前检测范围内未发现类型/ODR/命名空间冲突"
+            : "发现头文件冲突（重名类型 / ODR / 命名空间污染）";
+        item.consequence = conflict.overallPass
+            ? "该项对集成无明显额外风险"
+            : "多型号合进同一进程后可能偶发崩溃或数据错乱";
+        upsertSummaryItem(item);
+    }
 }
 
 void MainWindow::runLibCheckOnly() {
     const QString path = m_comboLibFile->currentData().toString();
     if (path.isEmpty()) {
         m_lblLibResult->setText(QStringLiteral("检查结果: 当前型号包中未找到 LIB 文件"));
+        TestItemResult item;
+        item.id = "lib";
+        item.name = "LIB 库文件检查";
+        item.state = TestItemState::Warn;
+        item.reason = "当前型号包中未找到 LIB 文件";
+        item.consequence = "工程链接导入库可能失败，仅能依赖隐式加载 DLL";
+        upsertSummaryItem(item);
         return;
     }
     if (!m_showSingleItemReport) m_latestReport = CombinedPrecheckReport();
@@ -3961,6 +4042,19 @@ void MainWindow::runLibCheckOnly() {
     }
     refreshReportBrowser();
     logMessage(QStringLiteral("SUCCESS: LIB 库文件检查完成：%1").arg(path));
+
+    TestItemResult item;
+    item.id = "lib";
+    item.name = "LIB 库文件检查";
+    item.state = report.overallPass ? TestItemState::Pass : TestItemState::Fail;
+    item.reason = report.overallPass
+        ? ("LIB 架构/类型/符号检查通过（" + report.architecture + " / " + report.libType + "）")
+        : ("LIB 检查未通过；缺少符号 "
+           + std::to_string(report.missingSymbols.size()) + " 个");
+    item.consequence = report.overallPass
+        ? "该项对集成无明显额外风险"
+        : "链接报错，或链接到错误架构的库";
+    upsertSummaryItem(item);
 }
 
 void MainWindow::runDllFileCheckOnly() {
@@ -3988,6 +4082,50 @@ void MainWindow::runDllFileCheckOnly() {
     m_lblPePageHint->hide();
     refreshReportBrowser();
     logMessage(QStringLiteral("SUCCESS: DLL 文件与依赖检查完成：%1").arg(dllPath));
+
+    {
+        const auto& pe = m_latestReport.peReport;
+        TestItemResult item;
+        item.id = "dll_pe";
+        item.name = "DLL 文件与依赖检查";
+        if (pe.overallPass && pe.missingDependencyCount == 0) {
+            item.state = TestItemState::Pass;
+            item.reason = "PE 通过，依赖完整（" + pe.architecture + " / " + pe.crtLinkage + "）";
+        } else if (pe.overallPass) {
+            item.state = TestItemState::Warn;
+            item.reason = "PE 通过，但仍有缺失依赖 "
+                + std::to_string(pe.missingDependencyCount) + " 项";
+            item.consequence = "换机或换主程序版本后可能加载失败、表现不一致";
+        } else {
+            item.state = TestItemState::Fail;
+            item.reason = "PE/依赖检查未通过；缺失依赖 "
+                + std::to_string(pe.missingDependencyCount) + " 项";
+            item.consequence = "LoadLibrary 失败，或因 CRT/依赖不匹配导致启动异常";
+        }
+        upsertSummaryItem(item);
+    }
+    {
+        const ModelPackageFiles package =
+            PackageScanner::ScanPackageDirectory(qToUtf8(model.packageDir));
+        const BuildConfigCapability cap =
+            PrecheckSummary::EvaluateBuildConfig(package, qToUtf8(model.name));
+        TestItemResult item;
+        item.id = "build_config";
+        item.name = "Release / Debug 构建产物";
+        if (cap.releaseVerdict == "FAIL") {
+            item.state = TestItemState::Fail;
+            item.reason = cap.releaseSummary.empty() ? "缺少 Release DLL" : cap.releaseSummary;
+            item.consequence = "无法完成 Release 集成加载与链接";
+        } else if (cap.debugVerdict != "PASS") {
+            item.state = TestItemState::Warn;
+            item.reason = "Release:" + cap.releaseVerdict + " / Debug:" + cap.debugVerdict;
+            item.consequence = "无法编译 Debug 版本；仅能按 Release 集成";
+        } else {
+            item.state = TestItemState::Pass;
+            item.reason = "Release 与 Debug 产物齐全";
+        }
+        upsertSummaryItem(item);
+    }
 }
 
 void MainWindow::runDllLoadCheckOnly() {
@@ -4014,6 +4152,23 @@ void MainWindow::runDllLoadCheckOnly() {
     m_lblLoadPageHint->hide();
     refreshReportBrowser();
     logMessage(QStringLiteral("SUCCESS: DLL 接口与加载检查完成：%1").arg(dllPath));
+
+    {
+        TestItemResult item;
+        item.id = "dll_load";
+        item.name = "DLL 接口与加载检查";
+        if (m_latestReport.loadReport.isLoaded) {
+            item.state = TestItemState::Pass;
+            item.reason = "DLL 加载成功，接口绑定完成";
+        } else {
+            item.state = TestItemState::Fail;
+            item.reason = m_latestReport.loadReport.errorLog.empty()
+                ? "DLL 加载失败"
+                : m_latestReport.loadReport.errorLog;
+            item.consequence = "主程序无法加载模型，或初始化阶段即崩溃";
+        }
+        upsertSummaryItem(item);
+    }
 }
 
 void MainWindow::runFullPrecheck() {
@@ -4462,6 +4617,13 @@ void MainWindow::runTrajectoryPreview() {
         m_lblTrajOut->setText(QStringLiteral("轨迹输出: 试跑失败 — %1")
             .arg(qUtf8(err.empty() ? "SEH/加载错误" : err)));
         logMessage(QString("ERROR: 轨迹试跑失败: %1").arg(qUtf8(err)));
+        TestItemResult item;
+        item.id = "trajectory";
+        item.name = "运行轨迹检查";
+        item.state = TestItemState::Fail;
+        item.reason = err.empty() ? "轨迹试跑失败（SEH/加载错误）" : err;
+        item.consequence = "态势/轨迹显示异常，或推演过程中返回错误/SEH";
+        upsertSummaryItem(item);
         return;
     }
     if (userRet != 0) {
@@ -4474,6 +4636,13 @@ void MainWindow::runTrajectoryPreview() {
             QStringLiteral("轨迹输出: 未采集到点。请在 UserMain 循环中写入 "
                            "out_lat/out_lon 并调用 RecordTrajectoryPoint(out_lat, out_lon) 后重新编译。"));
         logMessage("WARN: 轨迹点为空，请检查 UserMain 是否调用了 RecordTrajectoryPoint");
+        TestItemResult item;
+        item.id = "trajectory";
+        item.name = "运行轨迹检查";
+        item.state = TestItemState::Fail;
+        item.reason = "未采集到轨迹点（未调用 RecordTrajectoryPoint 或运行异常）";
+        item.consequence = "态势/轨迹显示异常，或推演过程中返回错误/SEH";
+        upsertSummaryItem(item);
         return;
     }
 
@@ -4487,6 +4656,13 @@ void MainWindow::runTrajectoryPreview() {
             .arg(last.lon, 0, 'f', 6)
             .arg(qUtf8(blob.summary)));
     logMessage(QString("SUCCESS: 轨迹试跑完成，记录 %1 个经纬度点").arg(pts.size()));
+
+    TestItemResult item;
+    item.id = "trajectory";
+    item.name = "运行轨迹检查";
+    item.state = TestItemState::Pass;
+    item.reason = "采集到 " + std::to_string(pts.size()) + " 个经纬度点";
+    upsertSummaryItem(item);
 }
 
 void MainWindow::startConcurrencyWorker(UserCodeHarness* harness,
@@ -4599,6 +4775,44 @@ void MainWindow::onPerfProfileFinished(const PerfProfileReport& report) {
 
     hideBusyOverlay();
     logMessage("SUCCESS: UserMain 性能压测执行完毕！");
+
+    {
+        TestItemResult perf;
+        perf.id = "perf";
+        perf.name = "UserMain 性能压测";
+        if (report.realtimeVerdict == "PASS") {
+            perf.state = TestItemState::Pass;
+            perf.reason = "实时性 PASS；Avg " + std::to_string(report.avgTimeMs)
+                + " ms，Max " + std::to_string(report.maxTimeMs) + " ms";
+        } else if (report.realtimeVerdict == "WARNING") {
+            perf.state = TestItemState::Warn;
+            perf.reason = "实时性 WARNING；Max " + std::to_string(report.maxTimeMs)
+                + " ms 接近或超过预算";
+            perf.consequence = "高负载或加速推演时可能掉帧、超时";
+        } else {
+            perf.state = TestItemState::Fail;
+            perf.reason = "实时性 FAIL；Max " + std::to_string(report.maxTimeMs)
+                + " ms 超出帧预算";
+            perf.consequence = "加速推演或高频率 Step 时可能卡顿、超时甚至崩溃";
+        }
+        upsertSummaryItem(perf);
+    }
+    {
+        TestItemResult mem;
+        mem.id = "memory";
+        mem.name = "内存泄漏监测";
+        if (report.memoryLeakRateMBPer10k < 5.0) {
+            mem.state = TestItemState::Pass;
+            mem.reason = std::to_string(report.memoryLeakRateMBPer10k)
+                + " MB / 10k 次调用，低于阈值";
+        } else {
+            mem.state = TestItemState::Warn;
+            mem.reason = std::to_string(report.memoryLeakRateMBPer10k)
+                + " MB / 10k 次调用，增长偏高";
+            mem.consequence = "长时间仿真可能内存持续上涨，最终 OOM 或不稳定";
+        }
+        upsertSummaryItem(mem);
+    }
 }
 
 void MainWindow::onConcurrencyFinished(const ConcurrencyTestReport& report) {
@@ -4635,6 +4849,32 @@ void MainWindow::onConcurrencyFinished(const ConcurrencyTestReport& report) {
     logMessage(QString("SUCCESS: %1 完成，判定=%2")
         .arg(isMultiModel ? "多型号并行" : "多线程测试")
         .arg(qUtf8(report.verdict)));
+
+    TestItemResult item;
+    if (isMultiModel) {
+        item.id = "multimodel";
+        item.name = "多型号并行";
+    } else {
+        item.id = "multithread";
+        item.name = "多线程稳定性";
+    }
+    if (report.verdict == "PASS") {
+        item.state = TestItemState::Pass;
+        item.reason = report.summary.empty() ? (item.name + "通过") : report.summary;
+    } else if (report.verdict == "WARNING") {
+        item.state = TestItemState::Warn;
+        item.reason = report.summary;
+        item.consequence = isMultiModel
+            ? "同厂家多模型同场景可能出现数据异常或偶发失败"
+            : "主程序开启多线程后可能偶发失败";
+    } else {
+        item.state = TestItemState::Fail;
+        item.reason = report.summary.empty() ? (item.name + "失败") : report.summary;
+        item.consequence = isMultiModel
+            ? "同厂家不同模型同场景冲突、崩溃或内存破坏"
+            : "主程序勾选多线程后模型崩溃";
+    }
+    upsertSummaryItem(item);
 }
 
 void MainWindow::updatePeView(const PeAnalysisReport& pe) {
@@ -4934,6 +5174,15 @@ void MainWindow::refreshAllPageResultPanels() {
     applyPageResult(m_pageResultMultiThread, b.findById("multithread"));
     applyPageResult(m_pageResultMultiObject, b.findById("multiobject"));
     refreshNavigationStatus();
+}
+
+void MainWindow::upsertSummaryItem(const TestItemResult& item) {
+    if (!m_hasSummaryBoard) {
+        m_latestSummaryBoard = PrecheckSummary::MakeSkeletonBoard();
+        m_hasSummaryBoard = true;
+    }
+    PrecheckSummary::UpsertItem(m_latestSummaryBoard, item);
+    refreshAllPageResultPanels();
 }
 
 void MainWindow::refreshNavigationStatus() {

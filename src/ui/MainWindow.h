@@ -144,6 +144,8 @@ private:
     void applyPageResult(PageResultWidgets& widgets, const TestItemResult* item);
     void refreshAllPageResultPanels();
     void refreshNavigationStatus();
+    /** Merge a single-page test result into the summary board and refresh nav + panels. */
+    void upsertSummaryItem(const TestItemResult& item);
     PageResultWidgets createPageResultPanel(QWidget* parent, QVBoxLayout* layout,
                                             const QString& title);
     void updatePeView(const PeAnalysisReport& pe);
