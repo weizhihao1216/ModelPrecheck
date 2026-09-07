@@ -277,6 +277,7 @@ private:
     // Tab2 stress
     QComboBox* m_comboStressModel;
     QSpinBox* m_spnSteps;
+    QSpinBox* m_spnPerfMemCapMB;
     QComboBox* m_comboHz;
     QPushButton* m_btnRunStress;
     QPushButton* m_btnRunTrajectory;

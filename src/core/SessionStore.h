@@ -35,6 +35,7 @@ struct SessionSnapshot {
     int navigationRow = -1;
     int perfSteps = 10000;
     double perfHz = 50.0;
+    int perfMemCapMB = 256; // Working Set growth abort cap; 0 = unlimited
     int threadCount = 4;
     QByteArray windowGeometry;
     std::vector<SessionModelSnapshot> models;

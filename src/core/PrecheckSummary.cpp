@@ -504,40 +504,90 @@ PrecheckSummaryBoard PrecheckSummary::BuildFromFleet(const FleetSessionReport& f
     }
 
     {
-        TestItemResult item;
-        item.id = "multiobject";
-        item.name = "单线程多对象";
-        int configured = 0, tested = 0, passed = 0, failed = 0;
-        for (const auto& mo : fleet.multiObjectReports) {
-            if (mo.configured) ++configured;
-            if (!mo.report.verdict.empty()) {
-                ++tested;
-                if (mo.report.verdict == "PASS") ++passed;
-                else if (mo.report.verdict == "FAIL") ++failed;
-            }
-        }
-        if (configured == 0) {
-            item.state = TestItemState::Skipped;
-            item.reason = "未配置多对象 Harness（可选）";
-            item.consequence = "多实例隔离能力未验证";
-        } else if (tested == 0) {
-            item.state = TestItemState::Skipped;
-            item.reason = "已配置但未编译/未验证多对象 Harness";
-            item.consequence = "同一武器多枚实例的稳定性未知";
-        } else if (failed > 0) {
-            item.state = TestItemState::Fail;
-            item.reason = std::to_string(passed) + "/" + std::to_string(tested)
-                + " 通过；存在串扰、返回码异常或 SEH";
-            item.consequence = "同一武器发射多枚时崩溃或状态互相干扰";
-        } else {
-            item.state = TestItemState::Pass;
-            item.reason = std::to_string(passed) + "/" + std::to_string(tested)
-                + " 基线/交错测试通过";
-        }
-        pushItem(board, item);
+        pushItem(board, EvaluateMultiObjectItem(fleet));
     }
 
     return board;
+}
+
+TestItemResult PrecheckSummary::EvaluateMultiObjectItem(const FleetSessionReport& fleet) {
+    TestItemResult item;
+    item.id = "multiobject";
+    item.name = "单线程多对象";
+
+    int configured = 0, tested = 0, passed = 0, failed = 0, warned = 0;
+    for (const auto& mo : fleet.multiObjectReports) {
+        if (mo.configured) ++configured;
+        if (!mo.report.verdict.empty()) {
+            ++tested;
+            if (mo.report.verdict == "PASS") ++passed;
+            else if (mo.report.verdict == "FAIL") ++failed;
+            else if (mo.report.verdict == "WARNING") ++warned;
+        }
+    }
+
+    const auto& fleetMo = fleet.fleetMultiObjectReport;
+    const bool fleetRan = !fleetMo.verdict.empty();
+    const bool fleetFail = fleetRan && fleetMo.verdict == "FAIL";
+    const bool fleetWarn = fleetRan && fleetMo.verdict == "WARNING";
+
+    if (configured == 0 && !fleetRan) {
+        item.state = TestItemState::Skipped;
+        item.reason = "未配置多对象 Harness（可选）";
+        item.consequence = "多实例隔离能力未验证";
+        return item;
+    }
+    if (tested == 0 && !fleetRan) {
+        item.state = TestItemState::Skipped;
+        item.reason = "已配置但未编译/未验证多对象 Harness";
+        item.consequence = "同一武器多枚实例的稳定性未知";
+        return item;
+    }
+
+    std::string singleReason;
+    if (tested > 0) {
+        singleReason = "单型号基线/交错 " + std::to_string(passed) + "/"
+            + std::to_string(tested) + " 通过";
+        if (failed > 0)
+            singleReason += "（失败 " + std::to_string(failed) + "）";
+        if (warned > 0)
+            singleReason += "（警告 " + std::to_string(warned) + "）";
+    }
+    std::string fleetReason;
+    if (fleetRan) {
+        fleetReason = "跨型号对象交错 " + fleetMo.verdict;
+        if (!fleetMo.summary.empty())
+            fleetReason += " — " + fleetMo.summary;
+    }
+
+    if (failed > 0 || fleetFail) {
+        item.state = TestItemState::Fail;
+        if (!singleReason.empty() && !fleetReason.empty())
+            item.reason = singleReason + "；" + fleetReason;
+        else if (!fleetReason.empty())
+            item.reason = fleetReason;
+        else
+            item.reason = singleReason + "；存在串扰、返回码异常或 SEH";
+        item.consequence = fleetFail
+            ? "多型号同进程交错时状态串扰或执行不完整，集成后多武器同场景风险高"
+            : "同一武器发射多枚时崩溃或状态互相干扰";
+    } else if (warned > 0 || fleetWarn) {
+        item.state = TestItemState::Warn;
+        item.reason = !fleetReason.empty() && !singleReason.empty()
+            ? singleReason + "；" + fleetReason
+            : (!fleetReason.empty() ? fleetReason : singleReason);
+        item.consequence = "多实例/跨型号场景可能存在轻微偏差";
+    } else {
+        item.state = TestItemState::Pass;
+        if (!singleReason.empty() && !fleetReason.empty())
+            item.reason = singleReason + "；" + fleetReason;
+        else if (!fleetReason.empty())
+            item.reason = fleetReason;
+        else
+            item.reason = singleReason.empty()
+                ? "基线/交错测试通过" : singleReason;
+    }
+    return item;
 }
 
 std::string PrecheckSummary::ToHtmlSection(const PrecheckSummaryBoard& board,

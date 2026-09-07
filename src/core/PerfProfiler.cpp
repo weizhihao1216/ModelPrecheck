@@ -4,11 +4,13 @@
 #include "../utils/MemoryUtils.h"
 #include "../utils/QtEncoding.h"
 
-PerfProfilerWorker::PerfProfilerWorker(UserCodeHarness* harness, int totalRuns, double targetHz, uint32_t randomSeed)
+PerfProfilerWorker::PerfProfilerWorker(UserCodeHarness* harness, int totalRuns, double targetHz,
+                                       uint32_t randomSeed, double maxMemoryDeltaMB)
     : m_pHarness(harness)
     , m_totalRuns(totalRuns)
     , m_targetHz(targetHz)
-    , m_randomSeed(randomSeed) {
+    , m_randomSeed(randomSeed)
+    , m_maxMemoryDeltaMB(maxMemoryDeltaMB) {
 }
 
 PerfProfilerWorker::~PerfProfilerWorker() = default;
@@ -43,6 +45,18 @@ void PerfProfilerWorker::process() {
 
     int sampleInterval = report.totalSteps / 100;
     if (sampleInterval < 1) sampleInterval = 1;
+    // Cap Working Set growth so intentional leak samples cannot hang the UI / OOM.
+    // <=0 disables the cap (user-configurable; UI default 256 MB).
+    const double maxMemoryDeltaMB = m_maxMemoryDeltaMB;
+    const bool memoryCapEnabled = maxMemoryDeltaMB > 0.0;
+    constexpr int kMemoryCheckEvery = 25;
+
+    if (memoryCapEnabled) {
+        emit logMessage(QStringLiteral("INFO: 工作集增长上限 %1 MB（超过则提前结束压测）")
+            .arg(maxMemoryDeltaMB, 0, 'f', 0));
+    } else {
+        emit logMessage(QStringLiteral("INFO: 未设置工作集增长上限（将跑满计划次数）"));
+    }
 
     for (int i = 0; i < report.totalSteps; ++i) {
         uint32_t seed = m_randomSeed + static_cast<uint32_t>(i) * 9973u;
@@ -77,16 +91,31 @@ void PerfProfilerWorker::process() {
         if (elapsedMs > maxT) maxT = elapsedMs;
         report.completedSteps++;
 
-        if (i % sampleInterval == 0 || i == report.totalSteps - 1) {
+        const bool sampleNow = (i % sampleInterval == 0) || (i == report.totalSteps - 1);
+        const bool memCheckNow = (report.completedSteps % kMemoryCheckEvery == 0) || sampleNow;
+        if (sampleNow || memCheckNow) {
             ProcessMemoryStats curMem = MemoryUtils::GetCurrentProcessMemory();
             double curMB = MemoryUtils::BytesToMB(curMem.workingSetBytes);
-            PerfSample s;
-            s.stepIndex = i;
-            s.timeMs = elapsedMs;
-            s.memoryMB = curMB;
-            report.samples.push_back(s);
-            emit sampleAdded(i, elapsedMs, curMB);
-            emit progressUpdated(i + 1, report.totalSteps, elapsedMs, curMB);
+            if (sampleNow) {
+                PerfSample s;
+                s.stepIndex = i;
+                s.timeMs = elapsedMs;
+                s.memoryMB = curMB;
+                report.samples.push_back(s);
+                emit sampleAdded(i, elapsedMs, curMB);
+                emit progressUpdated(i + 1, report.totalSteps, elapsedMs, curMB);
+            }
+            if (memoryCapEnabled && curMB - report.initialMemoryMB >= maxMemoryDeltaMB) {
+                report.abortedDueToMemory = true;
+                emit logMessage(QString(
+                    "WARN: 工作集已增长超过 %1 MB（当前 %2 MB），提前结束压测以避免卡死/OOM；"
+                    "已完成 %3/%4 次，按已完成次数推算泄漏率")
+                    .arg(maxMemoryDeltaMB, 0, 'f', 0)
+                    .arg(curMB, 0, 'f', 1)
+                    .arg(report.completedSteps)
+                    .arg(report.totalSteps));
+                break;
+            }
         }
     }
 
@@ -116,10 +145,14 @@ void PerfProfilerWorker::process() {
         report.realtimeVerdict = "PASS";
     }
 
-    emit logMessage(QString("INFO: 压测结束 %1/%2 次 UserMain，Avg=%3 ms，判定=%4")
+    emit logMessage(QString("INFO: 压测结束 %1/%2 次 UserMain，Avg=%3 ms，内存Δ=%4 MB，"
+                            "泄漏率=%5 MB/10k%6，判定=%7")
         .arg(report.completedSteps)
         .arg(report.totalSteps)
         .arg(report.avgTimeMs, 0, 'f', 4)
+        .arg(report.memoryDeltaMB, 0, 'f', 2)
+        .arg(report.memoryLeakRateMBPer10k, 0, 'f', 2)
+        .arg(report.abortedDueToMemory ? QStringLiteral("（因内存提前中止）") : QString())
         .arg(qUtf8(report.realtimeVerdict)));
 
     emit finished(report);

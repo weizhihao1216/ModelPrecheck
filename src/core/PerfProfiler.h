@@ -28,6 +28,7 @@ struct PerfProfileReport {
     double finalMemoryMB = 0.0;
     double memoryDeltaMB = 0.0;
     double memoryLeakRateMBPer10k = 0.0;
+    bool abortedDueToMemory = false; // stopped early to avoid OOM on leaky models
 
     std::string realtimeVerdict; // PASS / WARNING / FAIL
     bool encounteredException = false;
@@ -42,7 +43,9 @@ Q_DECLARE_METATYPE(PerfProfileReport)
 class PerfProfilerWorker : public QObject {
     Q_OBJECT
 public:
-    PerfProfilerWorker(UserCodeHarness* harness, int totalRuns, double targetHz, uint32_t randomSeed = 1);
+    /** maxMemoryDeltaMB: abort when Working Set growth exceeds this (MB). <=0 means no limit. */
+    PerfProfilerWorker(UserCodeHarness* harness, int totalRuns, double targetHz,
+                       uint32_t randomSeed = 1, double maxMemoryDeltaMB = 256.0);
     ~PerfProfilerWorker();
 
 public slots:
@@ -59,6 +62,7 @@ private:
     int m_totalRuns;
     double m_targetHz;
     uint32_t m_randomSeed;
+    double m_maxMemoryDeltaMB;
 };
 
 #endif // PERF_PROFILER_H

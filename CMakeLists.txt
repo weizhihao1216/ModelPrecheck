@@ -121,10 +121,16 @@ target_link_libraries(ModelValidator PRIVATE
     psapi.lib
 )
 
-# Add sample DLL targets for test verification
-add_subdirectory(sample_models/CompatibleWeaponF)
-add_subdirectory(sample_models/CompatibleWeaponG)
-add_subdirectory(sample_models/testcase_kit)
+# Add sample DLL targets for test verification (only if present)
+if(EXISTS "${CMAKE_SOURCE_DIR}/sample_models/CompatibleWeaponF/CMakeLists.txt")
+    add_subdirectory(sample_models/CompatibleWeaponF)
+endif()
+if(EXISTS "${CMAKE_SOURCE_DIR}/sample_models/CompatibleWeaponG/CMakeLists.txt")
+    add_subdirectory(sample_models/CompatibleWeaponG)
+endif()
+if(EXISTS "${CMAKE_SOURCE_DIR}/sample_models/testcase_kit/CMakeLists.txt")
+    add_subdirectory(sample_models/testcase_kit)
+endif()
 
 # Explicit smoke target for the generated multi-object adapter DLL and scheduler.
 add_executable(MultiObjectHarnessSmoke EXCLUDE_FROM_ALL
@@ -147,27 +153,31 @@ endif()
 
 install(TARGETS ModelValidator DESTINATION .)
 
-# CompatibleWeapon F/G + testcase_kit packages (include/lib/models)
-install(TARGETS CompatibleWeaponF
-        RUNTIME DESTINATION sample_models/CompatibleWeaponF/models
-        ARCHIVE DESTINATION sample_models/CompatibleWeaponF/lib
-        LIBRARY DESTINATION sample_models/CompatibleWeaponF/models)
-install(FILES
-        sample_models/CompatibleWeaponF/WeaponModel.h
-        sample_models/CompatibleWeaponF/WeaponObject.h
-        DESTINATION sample_models/CompatibleWeaponF/include)
-install(FILES sample_models/CompatibleWeaponF/README.md
-        DESTINATION sample_models/CompatibleWeaponF)
+# CompatibleWeapon F/G packages (include/lib/models) when targets exist
+if(TARGET CompatibleWeaponF)
+    install(TARGETS CompatibleWeaponF
+            RUNTIME DESTINATION sample_models/CompatibleWeaponF/models
+            ARCHIVE DESTINATION sample_models/CompatibleWeaponF/lib
+            LIBRARY DESTINATION sample_models/CompatibleWeaponF/models)
+    install(FILES
+            sample_models/CompatibleWeaponF/WeaponModel.h
+            sample_models/CompatibleWeaponF/WeaponObject.h
+            DESTINATION sample_models/CompatibleWeaponF/include)
+    install(FILES sample_models/CompatibleWeaponF/README.md
+            DESTINATION sample_models/CompatibleWeaponF)
+endif()
 
-install(TARGETS CompatibleWeaponG
-        RUNTIME DESTINATION sample_models/CompatibleWeaponG/models
-        ARCHIVE DESTINATION sample_models/CompatibleWeaponG/lib
-        LIBRARY DESTINATION sample_models/CompatibleWeaponG/models)
-install(FILES
-        sample_models/CompatibleWeaponG/WeaponModel.h
-        sample_models/CompatibleWeaponG/WeaponObject.h
-        DESTINATION sample_models/CompatibleWeaponG/include)
-install(FILES sample_models/CompatibleWeaponG/README.md
-        DESTINATION sample_models/CompatibleWeaponG)
+if(TARGET CompatibleWeaponG)
+    install(TARGETS CompatibleWeaponG
+            RUNTIME DESTINATION sample_models/CompatibleWeaponG/models
+            ARCHIVE DESTINATION sample_models/CompatibleWeaponG/lib
+            LIBRARY DESTINATION sample_models/CompatibleWeaponG/models)
+    install(FILES
+            sample_models/CompatibleWeaponG/WeaponModel.h
+            sample_models/CompatibleWeaponG/WeaponObject.h
+            DESTINATION sample_models/CompatibleWeaponG/include)
+    install(FILES sample_models/CompatibleWeaponG/README.md
+            DESTINATION sample_models/CompatibleWeaponG)
+endif()
 
 install(FILES src/ui/themestyle.qss DESTINATION .)

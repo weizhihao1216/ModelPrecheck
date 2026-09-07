@@ -671,6 +671,17 @@ MainWindow::MainWindow(QWidget* parent)
     m_comboHz->setMinimumWidth(180);
     layoutPerfCtrl->addWidget(m_comboHz);
 
+    layoutPerfCtrl->addWidget(new QLabel(QStringLiteral("内存上限(MB):"), m_perfOptionsPanel));
+    m_spnPerfMemCapMB = new QSpinBox(m_perfOptionsPanel);
+    m_spnPerfMemCapMB->setRange(0, 65536);
+    m_spnPerfMemCapMB->setValue(256);
+    m_spnPerfMemCapMB->setSingleStep(64);
+    m_spnPerfMemCapMB->setMinimumWidth(80);
+    m_spnPerfMemCapMB->setToolTip(QStringLiteral(
+        "工作集相对压测起点的增长上限；超过则提前结束并按已完成次数推算泄漏率。\n"
+        "0 = 不限制（跑满重复次数）。默认 256。"));
+    layoutPerfCtrl->addWidget(m_spnPerfMemCapMB);
+
     m_btnRunStress = new QPushButton("执行性能压测", this);
     FitButtonText(m_btnRunStress);
     layoutPerfCtrl->addWidget(m_btnRunStress);
@@ -1234,6 +1245,7 @@ SessionSnapshot MainWindow::collectSessionSnapshot() const {
     snap.navigationRow = m_listTestNavigation ? m_listTestNavigation->currentRow() : -1;
     snap.perfSteps = m_spnSteps ? m_spnSteps->value() : 10000;
     snap.perfHz = m_comboHz ? m_comboHz->currentData().toDouble() : 50.0;
+    snap.perfMemCapMB = m_spnPerfMemCapMB ? m_spnPerfMemCapMB->value() : 256;
     snap.threadCount = m_spnThreadCount ? m_spnThreadCount->value() : 4;
     snap.windowGeometry = saveGeometry();
 
@@ -1341,6 +1353,8 @@ void MainWindow::applySessionSnapshot(const SessionSnapshot& snapshot) {
         }
         if (hzIndex >= 0) m_comboHz->setCurrentIndex(hzIndex);
     }
+    if (m_spnPerfMemCapMB)
+        m_spnPerfMemCapMB->setValue(qBound(0, snapshot.perfMemCapMB, 65536));
     if (m_spnThreadCount)
         m_spnThreadCount->setValue(qBound(1, snapshot.threadCount, 64));
 
@@ -1707,6 +1721,7 @@ void MainWindow::updateWorkflowUi() {
     m_comboStressModel->setEnabled(anyCompiled);
     m_spnSteps->setEnabled(anyCompiled);
     m_comboHz->setEnabled(anyCompiled);
+    if (m_spnPerfMemCapMB) m_spnPerfMemCapMB->setEnabled(anyCompiled);
     m_btnRunStress->setEnabled(anyCompiled);
     m_btnRunTrajectory->setEnabled(anyCompiled);
     m_lblPerfPageHint->setVisible(!anyCompiled);
@@ -3316,27 +3331,7 @@ void MainWindow::runMultiObjectTest() {
     }
     if (!replaced) m_latestFleetReport.multiObjectReports.push_back(named);
     refreshReportBrowser();
-
-    {
-        TestItemResult item;
-        item.id = "multiobject";
-        item.name = "单线程多对象";
-        if (entry.multiObjectReport.verdict == "PASS") {
-            item.state = TestItemState::Pass;
-            item.reason = entry.multiObjectReport.summary.empty()
-                ? "单线程多对象测试通过" : entry.multiObjectReport.summary;
-        } else if (entry.multiObjectReport.verdict == "WARNING") {
-            item.state = TestItemState::Warn;
-            item.reason = entry.multiObjectReport.summary;
-            item.consequence = "同一武器多枚实例可能存在轻微偏差";
-        } else {
-            item.state = TestItemState::Fail;
-            item.reason = entry.multiObjectReport.summary.empty()
-                ? "单线程多对象测试失败" : entry.multiObjectReport.summary;
-            item.consequence = "同一武器发射多枚时崩溃或状态互相干扰";
-        }
-        upsertSummaryItem(item);
-    }
+    upsertSummaryItem(PrecheckSummary::EvaluateMultiObjectItem(m_latestFleetReport));
 }
 
 void MainWindow::updateMultiObjectResultView(const MultiObjectTestReport& report) {
@@ -3567,6 +3562,7 @@ void MainWindow::runFleetMultiObjectTest() {
     m_latestFleetReport.fleetMultiObjectReport = report;
     m_showSingleItemReport = false;
     refreshReportBrowser();
+    upsertSummaryItem(PrecheckSummary::EvaluateMultiObjectItem(m_latestFleetReport));
     logMessage(QStringLiteral("%1: 跨型号对象交错 — %2")
         .arg(qUtf8(report.verdict), qUtf8(report.summary)));
 }
@@ -4186,7 +4182,14 @@ void MainWindow::runFullPrecheck() {
 
     const int perfSteps = m_spnSteps->value();
     const double perfHz = m_comboHz->currentData().toDouble();
+    const double perfMemCapMB = m_spnPerfMemCapMB ? m_spnPerfMemCapMB->value() : 256.0;
     const int threadCount = m_spnThreadCount->value();
+    saveMultiObjectEditor();
+    const int fleetMoSteps = m_spnMultiObjectSteps->value();
+    const double fleetMoDt = m_spnMultiObjectDt->value();
+    const double fleetMoTolerance = m_spnMultiObjectTolerance->value();
+    const auto fleetMoSchedule = static_cast<MultiObjectSchedule>(
+        m_comboMultiObjectSchedule->currentData().toInt());
     int passedModels = 0;
 
     wait.run([&]{
@@ -4233,11 +4236,17 @@ void MainWindow::runFullPrecheck() {
         setBusyOverlayText(QStringLiteral("一键预检：性能/轨迹「%1」…").arg(model.name));
         PerfProfileReport perf;
         PerfProfilerWorker worker(model.harness.get(), perfSteps, perfHz,
-                                  static_cast<uint32_t>(modelIndex + 1));
+                                  static_cast<uint32_t>(modelIndex + 1), perfMemCapMB);
         QObject::connect(&worker, &PerfProfilerWorker::logMessage,
                          this, &MainWindow::logMessage, Qt::QueuedConnection);
         QObject::connect(&worker, &PerfProfilerWorker::finished,
                          [&perf](const PerfProfileReport& report) { perf = report; });
+        QObject::connect(&worker, &PerfProfilerWorker::progressUpdated, this,
+            [this, modelName = model.name](int cur, int total, double, double memMB) {
+                setBusyOverlayText(
+                    QStringLiteral("一键预检：性能/轨迹「%1」… %2/%3（工作集 %4 MB）")
+                        .arg(modelName).arg(cur).arg(total).arg(memMB, 0, 'f', 1));
+            }, Qt::QueuedConnection);
         worker.process();
 
         if (firstPerf) {
@@ -4381,6 +4390,41 @@ void MainWindow::runFullPrecheck() {
         m_latestFleetReport.multiObjectReports.push_back(named);
     }
 
+    {
+        FleetMultiObjectTestConfig fleetMoConfig;
+        fleetMoConfig.stepCount = fleetMoSteps;
+        fleetMoConfig.stepDt = fleetMoDt;
+        fleetMoConfig.tolerance = fleetMoTolerance;
+        fleetMoConfig.schedule = fleetMoSchedule;
+        fleetMoConfig.randomSeed = 20260903u;
+        for (int modelIndex = 0; modelIndex < static_cast<int>(m_models.size()); ++modelIndex) {
+            FleetModelEntry& model = m_models[static_cast<size_t>(modelIndex)];
+            if (!model.multiObjectHarness || !model.multiObjectHarness->IsLoaded()
+                || !model.multiObjectMapping.abiValidated
+                || !model.multiObjectHarness->SupportsObjectSession()) {
+                continue;
+            }
+            FleetMultiObjectModelSpec spec;
+            spec.harness = model.multiObjectHarness.get();
+            spec.modelName = qToUtf8(model.name);
+            spec.objectCount = qMax(1, model.multiObjectCount);
+            fleetMoConfig.models.push_back(spec);
+        }
+        if (fleetMoConfig.models.size() >= 2) {
+            setBusyOverlayText(QStringLiteral("一键预检：跨型号对象交错…"));
+            m_latestFleetReport.fleetMultiObjectReport =
+                FleetSingleThreadMultiObjectTester::Run(fleetMoConfig);
+            for (const auto& line : m_latestFleetReport.fleetMultiObjectReport.logMessages)
+                logMessage(qDecodeLog(line));
+            logMessage(QStringLiteral("%1: 跨型号对象交错 — %2")
+                .arg(qUtf8(m_latestFleetReport.fleetMultiObjectReport.verdict),
+                     qUtf8(m_latestFleetReport.fleetMultiObjectReport.summary)));
+        } else {
+            logMessage(QStringLiteral(
+                "INFO: 可参与跨型号对象交错的型号不足 2 个，已跳过该步骤"));
+        }
+    }
+
     m_latestFleetReport.overallPass = (passedModels == static_cast<int>(m_models.size()));
     if (m_latestFleetReport.perfReport.realtimeVerdict == "FAIL"
         || m_latestFleetReport.multiModelReport.verdict == "FAIL"
@@ -4395,6 +4439,8 @@ void MainWindow::runFullPrecheck() {
         if (named.configured && named.harnessCompiled && named.report.verdict == "FAIL")
             m_latestFleetReport.overallPass = false;
     }
+    if (m_latestFleetReport.fleetMultiObjectReport.verdict == "FAIL")
+        m_latestFleetReport.overallPass = false;
 
     // Aggregate badges across all models into m_latestDualReport counts/sizes
     m_latestDualReport = DualBuildPrecheckReport();
@@ -4457,6 +4503,18 @@ void MainWindow::runFullPrecheck() {
         m_lblMultiThreadSummary->setText(QString("多线程测试汇总: %1 — %2")
             .arg(qUtf8(m_latestFleetReport.multiThreadReport.verdict))
             .arg(qUtf8(m_latestFleetReport.multiThreadReport.summary)));
+    }
+    if (!m_latestFleetReport.fleetMultiObjectReport.verdict.empty()) {
+        updateFleetMultiObjectResultView(m_latestFleetReport.fleetMultiObjectReport);
+    } else if (!m_latestFleetReport.multiObjectReports.empty()) {
+        // Prefer last compiled model's single-model result when fleet was skipped.
+        for (auto it = m_latestFleetReport.multiObjectReports.rbegin();
+             it != m_latestFleetReport.multiObjectReports.rend(); ++it) {
+            if (!it->report.verdict.empty()) {
+                updateMultiObjectResultView(it->report);
+                break;
+            }
+        }
     }
     if (!m_latestDualReport.headerReports.empty()) {
         const auto& header = m_latestDualReport.headerReports.front();
@@ -4525,12 +4583,16 @@ void MainWindow::runStressTestOnly() {
 
     int runs = m_spnSteps->value();
     double targetHz = m_comboHz->currentData().toDouble();
+    const double perfMemCapMB = m_spnPerfMemCapMB ? m_spnPerfMemCapMB->value() : 256.0;
     double frameBudgetMs = 1000.0 / (targetHz > 0 ? targetHz : 50.0);
 
     m_pChartViewer->PrepareLiveProfiling(runs, frameBudgetMs);
 
-    logMessage(QString("INFO: 启动型号「%1」UserMain 性能压测 (重复次数: %2, 目标频率: %3 Hz)...")
-        .arg(entry->name).arg(runs).arg(targetHz));
+    logMessage(QString("INFO: 启动型号「%1」UserMain 性能压测 (重复次数: %2, 目标频率: %3 Hz, 内存上限: %4)...")
+        .arg(entry->name).arg(runs).arg(targetHz)
+        .arg(perfMemCapMB > 0
+            ? QStringLiteral("%1 MB").arg(perfMemCapMB, 0, 'f', 0)
+            : QStringLiteral("不限制")));
 
     showBusyOverlay(QStringLiteral("正在执行性能压测…"));
 
@@ -4542,7 +4604,8 @@ void MainWindow::runStressTestOnly() {
     }
 
     m_pWorkerThread = new QThread();
-    PerfProfilerWorker* worker = new PerfProfilerWorker(entry->harness.get(), runs, targetHz);
+    PerfProfilerWorker* worker = new PerfProfilerWorker(
+        entry->harness.get(), runs, targetHz, 1u, perfMemCapMB);
     worker->moveToThread(m_pWorkerThread);
 
     connect(m_pWorkerThread, &QThread::started, worker, &PerfProfilerWorker::process);

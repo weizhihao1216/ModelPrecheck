@@ -105,6 +105,7 @@ bool SessionStore::Save(const SessionSnapshot& snapshot, QString* error, const Q
     root.insert(QStringLiteral("navigationRow"), snapshot.navigationRow);
     root.insert(QStringLiteral("perfSteps"), snapshot.perfSteps);
     root.insert(QStringLiteral("perfHz"), snapshot.perfHz);
+    root.insert(QStringLiteral("perfMemCapMB"), snapshot.perfMemCapMB);
     root.insert(QStringLiteral("threadCount"), snapshot.threadCount);
     root.insert(QStringLiteral("windowGeometry"),
                 QString::fromLatin1(snapshot.windowGeometry.toBase64()));
@@ -151,6 +152,7 @@ bool SessionStore::Load(SessionSnapshot& snapshot, QString* error, const QString
     snapshot.navigationRow = root.value(QStringLiteral("navigationRow")).toInt(-1);
     snapshot.perfSteps = root.value(QStringLiteral("perfSteps")).toInt(10000);
     snapshot.perfHz = root.value(QStringLiteral("perfHz")).toDouble(50.0);
+    snapshot.perfMemCapMB = root.value(QStringLiteral("perfMemCapMB")).toInt(256);
     snapshot.threadCount = root.value(QStringLiteral("threadCount")).toInt(4);
     snapshot.windowGeometry = QByteArray::fromBase64(
         root.value(QStringLiteral("windowGeometry")).toString().toLatin1());

@@ -59,6 +59,8 @@ public:
     static BuildConfigCapability EvaluateBuildConfig(const ModelPackageFiles& pkg,
                                                      const std::string& modelName = {});
     static PrecheckSummaryBoard BuildFromFleet(const FleetSessionReport& fleet);
+    /** Merge per-model baseline/interleave + cross-model fleet result into one summary row. */
+    static TestItemResult EvaluateMultiObjectItem(const FleetSessionReport& fleet);
     /** Empty board with all known test ids in NotRun — for incremental single-item updates. */
     static PrecheckSummaryBoard MakeSkeletonBoard();
     /** Insert or replace one item and recount pass/fail/warn totals. */
