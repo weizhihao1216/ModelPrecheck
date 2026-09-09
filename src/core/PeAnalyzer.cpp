@@ -44,11 +44,22 @@ PeAnalysisReport PeAnalyzer::AnalyzeDll(const std::string& dllPath,
         return report;
     }
 
-    std::streamsize fileSize = file.tellg();
+    const std::streamsize fileSizeSigned = file.tellg();
     file.seekg(0, std::ios::beg);
+    if (fileSizeSigned <= 0 || fileSizeSigned > static_cast<std::streamsize>(512 * 1024 * 1024)) {
+        report.logMessages.push_back("ERROR: Invalid or oversized DLL file size for PE analysis.");
+        return report;
+    }
+    const size_t fileSize = static_cast<size_t>(fileSizeSigned);
 
-    std::vector<char> buffer(fileSize);
-    if (!file.read(buffer.data(), fileSize)) {
+    std::vector<char> buffer;
+    try {
+        buffer.resize(fileSize);
+    } catch (...) {
+        report.logMessages.push_back("ERROR: Out of memory allocating PE read buffer.");
+        return report;
+    }
+    if (!file.read(buffer.data(), static_cast<std::streamsize>(fileSize))) {
         report.logMessages.push_back("ERROR: Failed to read binary content from DLL.");
         return report;
     }
@@ -117,14 +128,32 @@ PeAnalysisReport PeAnalyzer::AnalyzeDll(const std::string& dllPath,
     bool looksDebugCrt = false;
     std::string detectedCrt = "";
 
-    if (importDataDir.VirtualAddress != 0 && importDataDir.Size != 0) {
+    auto readCString = [&](DWORD fileOffset) -> std::string {
+        if (fileOffset == 0 || fileOffset >= static_cast<size_t>(fileSize)) return {};
+        const char* begin = reinterpret_cast<const char*>(pBase + fileOffset);
+        const size_t maxLen = static_cast<size_t>(fileSize) - static_cast<size_t>(fileOffset);
+        size_t len = 0;
+        while (len < maxLen && begin[len] != '\0') ++len;
+        if (len == maxLen) return {}; // not null-terminated within file
+        return std::string(begin, len);
+    };
+
+    if (importDataDir.VirtualAddress != 0 && importDataDir.Size != 0 && pSectionHeader) {
         DWORD importOffset = RvaToFileOffset(importDataDir.VirtualAddress, pSectionHeader, numberOfSections);
-        if (importOffset != 0 && importOffset + sizeof(IMAGE_IMPORT_DESCRIPTOR) <= static_cast<size_t>(fileSize)) {
-            PIMAGE_IMPORT_DESCRIPTOR pImportDesc = reinterpret_cast<PIMAGE_IMPORT_DESCRIPTOR>(pBase + importOffset);
-            while (pImportDesc->Name != 0) {
+        if (importOffset != 0
+            && importOffset + sizeof(IMAGE_IMPORT_DESCRIPTOR) <= static_cast<size_t>(fileSize)) {
+            const size_t importEnd = (std::min)(
+                static_cast<size_t>(fileSize),
+                static_cast<size_t>(importOffset) + static_cast<size_t>(importDataDir.Size));
+            size_t descOffset = importOffset;
+            while (descOffset + sizeof(IMAGE_IMPORT_DESCRIPTOR) <= importEnd) {
+                PIMAGE_IMPORT_DESCRIPTOR pImportDesc =
+                    reinterpret_cast<PIMAGE_IMPORT_DESCRIPTOR>(pBase + descOffset);
+                if (pImportDesc->Name == 0) break;
+
                 DWORD nameOffset = RvaToFileOffset(pImportDesc->Name, pSectionHeader, numberOfSections);
-                if (nameOffset != 0 && nameOffset < static_cast<size_t>(fileSize)) {
-                    const char* dllName = reinterpret_cast<const char*>(pBase + nameOffset);
+                const std::string dllName = readCString(nameOffset);
+                if (!dllName.empty()) {
                     ImportedDllInfo info;
                     info.name = dllName;
                     info.found = ResolveDllLocation(dllName, targetDir, extraSearchPaths, info.resolvedPath);
@@ -133,7 +162,6 @@ PeAnalysisReport PeAnalyzer::AnalyzeDll(const std::string& dllPath,
                         report.missingDependencyCount++;
                     }
 
-                    // Check CRT DLL indicators
                     std::string upperDllName = dllName;
                     std::transform(upperDllName.begin(), upperDllName.end(), upperDllName.begin(), ::toupper);
                     if (upperDllName.find("VCRUNTIME") != std::string::npos ||
@@ -142,8 +170,7 @@ PeAnalysisReport PeAnalyzer::AnalyzeDll(const std::string& dllPath,
                         upperDllName.find("UCRTBASE") != std::string::npos) {
                         hasCrtDll = true;
                         if (detectedCrt.empty()) detectedCrt = dllName;
-                        else detectedCrt += ", " + std::string(dllName);
-                        // Debug CRT names typically end with 'd' before .dll (ucrtbased, vcruntime140d, ...)
+                        else detectedCrt += ", " + dllName;
                         if (upperDllName.find("UCRTBASED") != std::string::npos
                             || (upperDllName.size() > 5
                                 && upperDllName.compare(upperDllName.size() - 5, 5, "D.DLL") == 0)) {
@@ -153,7 +180,7 @@ PeAnalysisReport PeAnalyzer::AnalyzeDll(const std::string& dllPath,
 
                     report.importedDlls.push_back(info);
                 }
-                pImportDesc++;
+                descOffset += sizeof(IMAGE_IMPORT_DESCRIPTOR);
             }
         }
     }
@@ -173,37 +200,42 @@ PeAnalysisReport PeAnalyzer::AnalyzeDll(const std::string& dllPath,
 
     // Parse Export Table
     std::vector<std::string> exportedNames;
-    if (exportDataDir.VirtualAddress != 0 && exportDataDir.Size != 0) {
+    if (exportDataDir.VirtualAddress != 0 && exportDataDir.Size != 0 && pSectionHeader) {
         DWORD exportOffset = RvaToFileOffset(exportDataDir.VirtualAddress, pSectionHeader, numberOfSections);
         if (exportOffset != 0 && exportOffset + sizeof(IMAGE_EXPORT_DIRECTORY) <= static_cast<size_t>(fileSize)) {
             PIMAGE_EXPORT_DIRECTORY pExportDir = reinterpret_cast<PIMAGE_EXPORT_DIRECTORY>(pBase + exportOffset);
             DWORD namesOffset = RvaToFileOffset(pExportDir->AddressOfNames, pSectionHeader, numberOfSections);
             DWORD ordinalsOffset = RvaToFileOffset(pExportDir->AddressOfNameOrdinals, pSectionHeader, numberOfSections);
 
-            if (namesOffset != 0 && ordinalsOffset != 0) {
+            const DWORD nameCount = pExportDir->NumberOfNames;
+            // Guard against corrupt PE claiming huge NumberOfNames.
+            constexpr DWORD kMaxExportNames = 100000;
+            if (namesOffset != 0 && ordinalsOffset != 0 && nameCount > 0 && nameCount <= kMaxExportNames
+                && namesOffset + nameCount * sizeof(DWORD) <= static_cast<size_t>(fileSize)
+                && ordinalsOffset + nameCount * sizeof(WORD) <= static_cast<size_t>(fileSize)) {
                 DWORD* pNames = reinterpret_cast<DWORD*>(pBase + namesOffset);
                 WORD* pOrdinals = reinterpret_cast<WORD*>(pBase + ordinalsOffset);
 
-                for (DWORD i = 0; i < pExportDir->NumberOfNames; ++i) {
+                for (DWORD i = 0; i < nameCount; ++i) {
                     DWORD nameStrOffset = RvaToFileOffset(pNames[i], pSectionHeader, numberOfSections);
-                    if (nameStrOffset != 0 && nameStrOffset < static_cast<size_t>(fileSize)) {
-                        std::string expName = reinterpret_cast<const char*>(pBase + nameStrOffset);
-                        ExportedSymbolInfo symInfo;
-                        symInfo.name = expName;
-                        symInfo.ordinal = pExportDir->Base + pOrdinals[i];
-                        symInfo.rva = 0;
-                        symInfo.isRequiredInterface = false;
+                    const std::string expName = readCString(nameStrOffset);
+                    if (expName.empty()) continue;
 
-                        for (const auto& req : requiredExports) {
-                            if (expName == req) {
-                                symInfo.isRequiredInterface = true;
-                                break;
-                            }
+                    ExportedSymbolInfo symInfo;
+                    symInfo.name = expName;
+                    symInfo.ordinal = pExportDir->Base + pOrdinals[i];
+                    symInfo.rva = 0;
+                    symInfo.isRequiredInterface = false;
+
+                    for (const auto& req : requiredExports) {
+                        if (expName == req) {
+                            symInfo.isRequiredInterface = true;
+                            break;
                         }
-
-                        exportedNames.push_back(expName);
-                        report.exportedSymbols.push_back(symInfo);
                     }
+
+                    exportedNames.push_back(expName);
+                    report.exportedSymbols.push_back(symInfo);
                 }
             }
         }

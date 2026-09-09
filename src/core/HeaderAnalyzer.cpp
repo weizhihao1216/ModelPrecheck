@@ -1,9 +1,9 @@
 #include "HeaderAnalyzer.h"
 #include <fstream>
 #include <sstream>
-#include <regex>
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <set>
 #include <map>
 
@@ -85,19 +85,41 @@ ModelApiStyle HeaderAnalyzer::DetectApiStyle(const std::string& headerContent,
         }
     }
 
-    std::regex handleInitRegex(
-        R"((Model_Init|InitModel|Weapon_Init|Initialize)\s*\(\s*(void\s*\*|HANDLE|ModelHandle|[\w:]*Handle)\s*[,)])",
-        std::regex::icase);
-    std::regex handleStepRegex(
-        R"((Model_Step|StepModel|Weapon_Step|Update)\s*\(\s*(void\s*\*|HANDLE|ModelHandle|[\w:]*Handle)\s*[,)])",
-        std::regex::icase);
-    std::regex singletonInitRegex(
-        R"((Model_Init|InitModel|Weapon_Init)\s*\(\s*(const\s+)?WeaponModelParams)",
-        std::regex::icase);
+    // Avoid std::regex on full headers — MSVC regex can stack-overflow / AV on large vendor files.
+    auto DeclLooksLikeHandleFirstArg = [](const HeaderFunctionDecl& d) {
+        const std::string& p = d.paramList;
+        size_t i = 0;
+        while (i < p.size() && std::isspace(static_cast<unsigned char>(p[i]))) ++i;
+        const std::string head = p.substr(i, 64);
+        return ContainsIgnoreCase(head, "void*")
+            || ContainsIgnoreCase(head, "HANDLE")
+            || ContainsIgnoreCase(head, "Handle");
+    };
+    auto DeclNameIs = [](const HeaderFunctionDecl& d, std::initializer_list<const char*> names) {
+        for (const char* n : names) {
+            if (ContainsIgnoreCase(d.name, n)) return true;
+        }
+        return false;
+    };
 
-    bool handleInit = std::regex_search(headerContent, handleInitRegex);
-    bool handleStep = std::regex_search(headerContent, handleStepRegex);
-    bool singletonInit = std::regex_search(headerContent, singletonInitRegex);
+    const auto decls = ExtractFunctionDeclarations(headerContent);
+    bool handleInit = false;
+    bool handleStep = false;
+    bool singletonInit = false;
+    for (const auto& d : decls) {
+        if (DeclNameIs(d, {"Model_Init", "InitModel", "Weapon_Init", "Initialize"})
+            && DeclLooksLikeHandleFirstArg(d)) {
+            handleInit = true;
+        }
+        if (DeclNameIs(d, {"Model_Step", "StepModel", "Weapon_Step", "Update"})
+            && DeclLooksLikeHandleFirstArg(d)) {
+            handleStep = true;
+        }
+        if (DeclNameIs(d, {"Model_Init", "InitModel", "Weapon_Init"})
+            && ContainsIgnoreCase(d.paramList, "WeaponModelParams")) {
+            singletonInit = true;
+        }
+    }
 
     ModelApiStyle style = ModelApiStyle::Unknown;
     std::string desc;
@@ -589,101 +611,263 @@ std::string NormalizeTokens(const std::string& text) {
     return result;
 }
 
+bool IsIdentStart(char ch) {
+    return std::isalpha(static_cast<unsigned char>(ch)) || ch == '_';
+}
+
+bool IsIdentChar(char ch) {
+    return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_';
+}
+
+bool WordAt(const std::string& text, size_t pos, const char* word) {
+    const size_t len = std::strlen(word);
+    if (pos + len > text.size()) return false;
+    if (pos > 0 && IsIdentChar(text[pos - 1])) return false;
+    if (pos + len < text.size() && IsIdentChar(text[pos + len])) return false;
+    return text.compare(pos, len, word) == 0;
+}
+
+size_t SkipSpaces(const std::string& text, size_t i) {
+    while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i]))) ++i;
+    return i;
+}
+
+// Scan type definitions without std::regex (MSVC regex can stack-overflow on large headers).
+void CollectTypeDefs(const std::string& code, const std::string& path,
+                     std::vector<ParsedHeaderType>& allTypes,
+                     HeaderConflictReport& report) {
+    for (size_t i = 0; i < code.size(); ) {
+        std::string kind;
+        size_t afterKind = i;
+        if (WordAt(code, i, "struct")) { kind = "struct"; afterKind = i + 6; }
+        else if (WordAt(code, i, "class")) { kind = "class"; afterKind = i + 5; }
+        else if (WordAt(code, i, "union")) { kind = "union"; afterKind = i + 5; }
+        else if (WordAt(code, i, "enum")) {
+            afterKind = SkipSpaces(code, i + 4);
+            if (WordAt(code, afterKind, "class")) {
+                kind = "enum class";
+                afterKind += 5;
+            } else {
+                kind = "enum";
+            }
+        } else {
+            ++i;
+            continue;
+        }
+
+        size_t p = SkipSpaces(code, afterKind);
+        if (p >= code.size() || !IsIdentStart(code[p])) { ++i; continue; }
+        const size_t nameBegin = p;
+        while (p < code.size() && IsIdentChar(code[p])) ++p;
+        const std::string name = code.substr(nameBegin, p - nameBegin);
+
+        p = SkipSpaces(code, p);
+        // Optional base-clause: skip until '{' or ';'
+        if (p < code.size() && code[p] == ':') {
+            while (p < code.size() && code[p] != '{' && code[p] != ';') ++p;
+        }
+        p = SkipSpaces(code, p);
+        if (p >= code.size() || code[p] != '{') { ++i; continue; }
+
+        const size_t opening = p;
+        const size_t closing = MatchingBrace(code, opening);
+        if (closing == std::string::npos) { ++i; continue; }
+
+        const std::string nameSpace = NamespaceAt(code, i);
+        ParsedHeaderType type;
+        type.kind = kind;
+        type.name = name;
+        type.qualifiedName = nameSpace.empty() ? ("::" + type.name)
+                                               : (nameSpace + "::" + type.name);
+        type.normalizedBody = NormalizeTokens(code.substr(opening, closing - opening + 1));
+        type.file = path;
+        type.bodyBegin = opening;
+        type.bodyEnd = closing;
+        type.globalScope = nameSpace.empty();
+        allTypes.push_back(type);
+
+        if (type.globalScope) {
+            HeaderConflictIssue issue;
+            issue.category = "NAMESPACE_POLLUTION";
+            issue.severity = "WARNING";
+            issue.symbol = type.name;
+            issue.files.push_back(path);
+            issue.detail = type.kind + " " + type.name
+                + " 定义在全局命名空间，集成多个模型时存在名称污染风险";
+            report.issues.push_back(issue);
+            ++report.namespacePollutionCount;
+        }
+        i = closing + 1;
+    }
+}
+
+void CollectUsingNamespace(const std::string& code, const std::string& path,
+                           HeaderConflictReport& report) {
+    const char* key = "using";
+    const size_t keyLen = 5;
+    for (size_t i = 0; i + keyLen < code.size(); ++i) {
+        if (!WordAt(code, i, key)) continue;
+        size_t p = SkipSpaces(code, i + keyLen);
+        if (!WordAt(code, p, "namespace")) continue;
+        p = SkipSpaces(code, p + 9);
+        if (p >= code.size() || !IsIdentStart(code[p])) continue;
+        const size_t nsBegin = p;
+        while (p < code.size() && (IsIdentChar(code[p]) || code[p] == ':')) ++p;
+        const std::string ns = code.substr(nsBegin, p - nsBegin);
+        p = SkipSpaces(code, p);
+        if (p >= code.size() || code[p] != ';') continue;
+
+        HeaderConflictIssue issue;
+        issue.category = "NAMESPACE_POLLUTION";
+        issue.severity = "WARNING";
+        issue.symbol = ns;
+        issue.files.push_back(path);
+        issue.detail = "头文件使用 using namespace，会把命名空间成员引入所有包含该头文件的编译单元";
+        report.issues.push_back(issue);
+        ++report.namespacePollutionCount;
+        i = p;
+    }
+}
+
+void CollectUseNamespaceMacros(const std::string& code, const std::string& path,
+                               HeaderConflictReport& report) {
+    for (size_t i = 0; i < code.size(); ++i) {
+        if (!IsIdentStart(code[i])) continue;
+        const size_t begin = i;
+        while (i < code.size() && IsIdentChar(code[i])) ++i;
+        const std::string tok = code.substr(begin, i - begin);
+        if (tok.size() < 14) continue;
+        if (tok.compare(tok.size() - 13, 13, "_USE_NAMESPACE") != 0) continue;
+        bool allUpper = true;
+        for (char ch : tok) {
+            if (std::islower(static_cast<unsigned char>(ch))) { allUpper = false; break; }
+        }
+        if (!allUpper) continue;
+
+        HeaderConflictIssue issue;
+        issue.category = "NAMESPACE_POLLUTION";
+        issue.severity = "WARNING";
+        issue.symbol = tok;
+        issue.files.push_back(path);
+        issue.detail = "头文件中的命名空间展开宏可能污染包含者的全局作用域";
+        report.issues.push_back(issue);
+        ++report.namespacePollutionCount;
+    }
+}
+
+void CollectNonInlineFunctionBodies(const std::string& code, const std::string& path,
+                                    const std::vector<ParsedHeaderType>& allTypes,
+                                    HeaderConflictReport& report) {
+    const size_t n = code.size();
+    for (size_t i = 0; i < n; ) {
+        if (code[i] != '(') { ++i; continue; }
+
+        size_t nameEnd = i;
+        while (nameEnd > 0 && std::isspace(static_cast<unsigned char>(code[nameEnd - 1]))) --nameEnd;
+        if (nameEnd == 0) { ++i; continue; }
+        size_t nameBegin = nameEnd;
+        while (nameBegin > 0 && IsIdentChar(code[nameBegin - 1])) --nameBegin;
+        if (nameBegin >= nameEnd) { ++i; continue; }
+        const std::string name = code.substr(nameBegin, nameEnd - nameBegin);
+        if (name == "if" || name == "for" || name == "while" || name == "switch"
+            || name == "catch" || name == "sizeof") {
+            ++i;
+            continue;
+        }
+
+        // Scan modifiers immediately before the name (bounded)
+        size_t scan = nameBegin;
+        while (scan > 0 && std::isspace(static_cast<unsigned char>(code[scan - 1]))) --scan;
+        bool banned = false;
+        for (int attempt = 0; attempt < 6 && scan > 0; ++attempt) {
+            size_t wEnd = scan;
+            size_t wBegin = wEnd;
+            while (wBegin > 0 && IsIdentChar(code[wBegin - 1])) --wBegin;
+            if (wBegin >= wEnd) break;
+            const std::string w = code.substr(wBegin, wEnd - wBegin);
+            if (w == "inline" || w == "static" || w == "constexpr" || w == "template") {
+                banned = true;
+                break;
+            }
+            if (w == "struct" || w == "class" || w == "enum" || w == "union"
+                || w == "namespace" || w == "typedef") {
+                banned = true;
+                break;
+            }
+            scan = wBegin;
+            while (scan > 0 && std::isspace(static_cast<unsigned char>(code[scan - 1]))) --scan;
+        }
+        if (banned) { ++i; continue; }
+
+        // Balanced params
+        size_t j = i + 1;
+        int depth = 1;
+        while (j < n && depth > 0) {
+            if (code[j] == '(') ++depth;
+            else if (code[j] == ')') --depth;
+            ++j;
+            if (j - i > 8000) break;
+        }
+        if (depth != 0) { ++i; continue; }
+        size_t k = SkipSpaces(code, j);
+        if (k >= n || code[k] != '{') { ++i; continue; }
+
+        // Skip if inside a previously collected type body
+        bool insideType = false;
+        for (const auto& type : allTypes) {
+            if (type.file == path && i > type.bodyBegin && i < type.bodyEnd) {
+                insideType = true;
+                break;
+            }
+        }
+        if (insideType) { ++i; continue; }
+
+        HeaderConflictIssue issue;
+        issue.category = "ODR_CONFLICT";
+        issue.severity = "FAIL";
+        issue.symbol = name;
+        issue.files.push_back(path);
+        issue.detail = "头文件中定义了非 inline/static 的函数体，多翻译单元包含时可能违反 ODR";
+        report.issues.push_back(issue);
+        ++report.odrConflictCount;
+
+        const size_t closing = MatchingBrace(code, k);
+        i = (closing == std::string::npos) ? (k + 1) : (closing + 1);
+    }
+}
+
 } // namespace
 
 HeaderConflictReport HeaderAnalyzer::AnalyzeHeaderSet(
     const std::vector<std::string>& headerPaths) {
     HeaderConflictReport report;
     std::vector<ParsedHeaderType> allTypes;
+    constexpr size_t kMaxHeaderBytes = 4 * 1024 * 1024;
 
     for (const std::string& path : headerPaths) {
-        std::ifstream file(path, std::ios::binary);
+        std::ifstream file(path, std::ios::binary | std::ios::ate);
         if (!file.is_open()) {
             report.logMessages.push_back("WARN: 冲突分析无法打开头文件: " + path);
             continue;
         }
-        std::stringstream stream;
-        stream << file.rdbuf();
-        const std::string code = StripCommentsAndLiterals(stream.str());
-
-        std::regex typeRegex(
-            R"(\b(struct|class|union|enum(?:\s+class)?)\s+([A-Za-z_]\w*)\s*(?:\:[^{;]*)?\{)");
-        for (std::sregex_iterator it(code.begin(), code.end(), typeRegex), end; it != end; ++it) {
-            const size_t declaration = static_cast<size_t>(it->position());
-            const size_t opening = declaration + static_cast<size_t>(it->length()) - 1;
-            const size_t closing = MatchingBrace(code, opening);
-            if (closing == std::string::npos) continue;
-            const std::string nameSpace = NamespaceAt(code, declaration);
-            ParsedHeaderType type;
-            type.kind = (*it)[1].str();
-            type.name = (*it)[2].str();
-            type.qualifiedName = nameSpace.empty() ? ("::" + type.name)
-                                                   : (nameSpace + "::" + type.name);
-            type.normalizedBody = NormalizeTokens(code.substr(opening, closing - opening + 1));
-            type.file = path;
-            type.bodyBegin = opening;
-            type.bodyEnd = closing;
-            type.globalScope = nameSpace.empty();
-            allTypes.push_back(type);
-
-            if (type.globalScope) {
-                HeaderConflictIssue issue;
-                issue.category = "NAMESPACE_POLLUTION";
-                issue.severity = "WARNING";
-                issue.symbol = type.name;
-                issue.files.push_back(path);
-                issue.detail = type.kind + " " + type.name
-                    + " 定义在全局命名空间，集成多个模型时存在名称污染风险";
-                report.issues.push_back(issue);
-                ++report.namespacePollutionCount;
-            }
+        const std::streamsize sizeSigned = file.tellg();
+        file.seekg(0, std::ios::beg);
+        if (sizeSigned < 0 || static_cast<size_t>(sizeSigned) > kMaxHeaderBytes) {
+            report.logMessages.push_back(
+                "WARN: 冲突分析跳过过大或无效头文件: " + path);
+            continue;
         }
-
-        std::regex usingNamespaceRegex(R"(\busing\s+namespace\s+([A-Za-z_][\w:]*)\s*;)");
-        for (std::sregex_iterator it(code.begin(), code.end(), usingNamespaceRegex), end; it != end; ++it) {
-            HeaderConflictIssue issue;
-            issue.category = "NAMESPACE_POLLUTION";
-            issue.severity = "WARNING";
-            issue.symbol = (*it)[1].str();
-            issue.files.push_back(path);
-            issue.detail = "头文件使用 using namespace，会把命名空间成员引入所有包含该头文件的编译单元";
-            report.issues.push_back(issue);
-            ++report.namespacePollutionCount;
+        std::string raw(static_cast<size_t>(sizeSigned), '\0');
+        if (!file.read(&raw[0], sizeSigned)) {
+            report.logMessages.push_back("WARN: 冲突分析读取失败: " + path);
+            continue;
         }
+        const std::string code = StripCommentsAndLiterals(raw);
 
-        std::regex useNamespaceMacro(R"(\b([A-Z][A-Z0-9_]*_USE_NAMESPACE)\b)");
-        for (std::sregex_iterator it(code.begin(), code.end(), useNamespaceMacro), end; it != end; ++it) {
-            HeaderConflictIssue issue;
-            issue.category = "NAMESPACE_POLLUTION";
-            issue.severity = "WARNING";
-            issue.symbol = (*it)[1].str();
-            issue.files.push_back(path);
-            issue.detail = "头文件中的命名空间展开宏可能污染包含者的全局作用域";
-            report.issues.push_back(issue);
-            ++report.namespacePollutionCount;
-        }
-
-        std::regex functionBodyRegex(
-            R"((^|[\r\n])\s*(?!inline\b|static\b|constexpr\b|template\b)([A-Za-z_][\w:<>,\s*&~]*?)\s+([A-Za-z_]\w*)\s*\([^;{}]*\)\s*\{)");
-        for (std::sregex_iterator it(code.begin(), code.end(), functionBodyRegex), end; it != end; ++it) {
-            const size_t position = static_cast<size_t>(it->position());
-            bool insideType = false;
-            for (const auto& type : allTypes) {
-                if (type.file == path && position > type.bodyBegin && position < type.bodyEnd) {
-                    insideType = true;
-                    break;
-                }
-            }
-            if (insideType) continue;
-            HeaderConflictIssue issue;
-            issue.category = "ODR_CONFLICT";
-            issue.severity = "FAIL";
-            issue.symbol = (*it)[3].str();
-            issue.files.push_back(path);
-            issue.detail = "头文件中定义了非 inline/static 的函数体，多翻译单元包含时可能违反 ODR";
-            report.issues.push_back(issue);
-            ++report.odrConflictCount;
-        }
+        CollectTypeDefs(code, path, allTypes, report);
+        CollectUsingNamespace(code, path, report);
+        CollectUseNamespaceMacros(code, path, report);
+        CollectNonInlineFunctionBodies(code, path, allTypes, report);
     }
 
     std::map<std::string, std::vector<const ParsedHeaderType*>> byQualifiedName;

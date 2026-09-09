@@ -12,6 +12,7 @@
 #include <QThread>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QtGlobal>
 #include <functional>
 
 namespace {
@@ -257,7 +258,9 @@ void BusyOverlayWidget::hideBusy() {
 
 void BusyOverlayWidget::setBusyText(const QString& text) {
     relayoutLabel(text);
-    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    // Do not processEvents here: during runBlocking's QEventLoop it can re-enter
+    // deeply while the worker floods QueuedConnection updates, and has caused
+    // instability. The spinner timer + loop.exec already keep the UI alive.
 }
 
 void BusyOverlayWidget::showResultToast(const QString& text, bool success, int durationMs) {
@@ -285,7 +288,15 @@ void BusyOverlayWidget::runBlocking(const std::function<void()>& work) {
     if (!work) return;
 
     QEventLoop loop;
-    QThread* thread = QThread::create(work);
+    QThread* thread = QThread::create([work]() {
+        try {
+            work();
+        } catch (const std::exception& ex) {
+            qWarning("BusyOverlay worker std::exception: %s", ex.what());
+        } catch (...) {
+            qWarning("BusyOverlay worker unknown C++ exception");
+        }
+    });
     QObject::connect(thread, &QThread::finished, &loop, &QEventLoop::quit);
     thread->start();
     loop.exec();

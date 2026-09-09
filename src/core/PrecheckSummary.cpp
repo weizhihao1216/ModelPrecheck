@@ -208,7 +208,7 @@ PrecheckSummaryBoard PrecheckSummary::BuildFromFleet(const FleetSessionReport& f
 
     int headerTotal = 0, headerPass = 0;
     int libTotal = 0, libPass = 0;
-    int dllTotal = 0, dllPePass = 0, dllLoadPass = 0, missingDeps = 0;
+    int dllTotal = 0, dllPePass = 0, missingDeps = 0;
     bool anyPackage = false;
     bool allReleaseOk = true;
     bool anyDebugFail = false;
@@ -238,7 +238,6 @@ PrecheckSummaryBoard PrecheckSummary::BuildFromFleet(const FleetSessionReport& f
         dllTotal += static_cast<int>(model.dllReports.size());
         dllPePass += model.passedDllCount;
         for (const auto& d : model.dllReports) {
-            if (d.loadReport.isLoaded) ++dllLoadPass;
             missingDeps += d.peReport.missingDependencyCount;
         }
     }
@@ -366,18 +365,45 @@ PrecheckSummaryBoard PrecheckSummary::BuildFromFleet(const FleetSessionReport& f
         TestItemResult item;
         item.id = "dll_load";
         item.name = "DLL 接口与加载检查";
+        int loadAttempted = 0;
+        int loadPass = 0;
+        int loadSkip = 0;
+        for (const auto& model : fleet.modelReports) {
+            for (const auto& d : model.dllReports) {
+                const bool skipped = !d.loadReport.isLoaded
+                    && (d.loadReport.errorLog.compare(0, 5, "SKIP:") == 0
+                        || d.loadReport.errorLog.find("SKIP:") != std::string::npos);
+                if (skipped) {
+                    ++loadSkip;
+                    continue;
+                }
+                ++loadAttempted;
+                if (d.loadReport.isLoaded) ++loadPass;
+            }
+        }
         if (!anyPackage || dllTotal == 0) {
             item.state = TestItemState::NotRun;
             item.reason = "尚未执行检测或未发现 DLL";
             item.consequence = "能否安全加载与绑定接口未知";
-        } else if (dllLoadPass == dllTotal) {
+        } else if (loadAttempted == 0) {
+            item.state = TestItemState::Skipped;
+            item.reason = "一键预检未对第三方 DLL 执行 LoadLibrary（已跳过 "
+                + std::to_string(loadSkip) + " 个；Debug/CRT 风险或显式 SKIP）";
+            item.consequence = "请在「DLL 接口与加载」页对 Release DLL 单项检查，或编译 Harness 验证";
+        } else if (loadPass == loadAttempted) {
             item.state = TestItemState::Pass;
-            item.reason = std::to_string(dllLoadPass) + "/" + std::to_string(dllTotal)
-                + " 加载成功";
+            item.reason = std::to_string(loadPass) + "/" + std::to_string(loadAttempted)
+                + " 加载成功"
+                + (loadSkip > 0
+                    ? ("（另跳过 " + std::to_string(loadSkip) + " 个 Debug/SKIP）")
+                    : std::string());
         } else {
             item.state = TestItemState::Fail;
-            item.reason = std::to_string(dllLoadPass) + "/" + std::to_string(dllTotal)
-                + " 加载成功（失败常与依赖、授权或 CRT 有关）";
+            item.reason = std::to_string(loadPass) + "/" + std::to_string(loadAttempted)
+                + " 加载成功（失败常与依赖、授权或 CRT 有关）"
+                + (loadSkip > 0
+                    ? ("；另跳过 " + std::to_string(loadSkip) + " 个")
+                    : std::string());
             item.consequence = "主程序无法加载模型，或初始化阶段即崩溃";
         }
         pushItem(board, item);

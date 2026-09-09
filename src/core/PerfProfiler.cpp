@@ -1,6 +1,7 @@
 #include "PerfProfiler.h"
 #include <chrono>
 #include <cmath>
+#include <algorithm>
 #include "../utils/MemoryUtils.h"
 #include "../utils/QtEncoding.h"
 
@@ -34,7 +35,8 @@ void PerfProfilerWorker::process() {
         .arg(report.frameBudgetMs, 0, 'f', 3));
 
     ProcessMemoryStats initialMem = MemoryUtils::GetCurrentProcessMemory();
-    report.initialMemoryMB = MemoryUtils::BytesToMB(initialMem.workingSetBytes);
+    report.initialMemoryMB = MemoryUtils::BytesToMB(
+        (std::max)(initialMem.workingSetBytes, initialMem.privateUsageBytes));
 
     std::vector<double> timeSamples;
     timeSamples.reserve(static_cast<size_t>(report.totalSteps));
@@ -45,18 +47,28 @@ void PerfProfilerWorker::process() {
 
     int sampleInterval = report.totalSteps / 100;
     if (sampleInterval < 1) sampleInterval = 1;
-    // Cap Working Set growth so intentional leak samples cannot hang the UI / OOM.
-    // <=0 disables the cap (user-configurable; UI default 256 MB).
+    if (sampleInterval > 50) sampleInterval = 50; // keep UI feedback responsive on large run counts
+    // Cap commit/WS growth. Prefer PrivateUsage — MemLeak can grow commit while WS lags,
+    // which previously let one-click precheck OOM-crash around thousands of runs (e.g. ~5100).
     const double maxMemoryDeltaMB = m_maxMemoryDeltaMB;
     const bool memoryCapEnabled = maxMemoryDeltaMB > 0.0;
-    constexpr int kMemoryCheckEvery = 25;
+    constexpr int kMemoryCheckEvery = 5;
+    constexpr double kMaxWallClockSec = 45.0;
+    const auto wallStart = std::chrono::steady_clock::now();
+
+    auto footprintMB = [](const ProcessMemoryStats& s) {
+        return MemoryUtils::BytesToMB((std::max)(s.workingSetBytes, s.privateUsageBytes));
+    };
 
     if (memoryCapEnabled) {
-        emit logMessage(QStringLiteral("INFO: 工作集增长上限 %1 MB（超过则提前结束压测）")
+        emit logMessage(QStringLiteral(
+            "INFO: 内存增长上限 %1 MB（按 WorkingSet/PrivateUsage 较大值；超过则提前结束）")
             .arg(maxMemoryDeltaMB, 0, 'f', 0));
     } else {
-        emit logMessage(QStringLiteral("INFO: 未设置工作集增长上限（将跑满计划次数）"));
+        emit logMessage(QStringLiteral("INFO: 未设置内存增长上限（将跑满计划次数）"));
     }
+    emit logMessage(QStringLiteral("INFO: 单型号压测最长约 %1 秒，超时将提前结束")
+        .arg(kMaxWallClockSec, 0, 'f', 0));
 
     for (int i = 0; i < report.totalSteps; ++i) {
         uint32_t seed = m_randomSeed + static_cast<uint32_t>(i) * 9973u;
@@ -75,6 +87,7 @@ void PerfProfilerWorker::process() {
             report.encounteredException = true;
             report.exceptionLog = "UserMain 第 " + std::to_string(i) + " 次执行异常: " + err;
             emit logMessage("ERROR: " + qDecodeLog(report.exceptionLog));
+            emit progressUpdated(i + 1, report.totalSteps, elapsedMs, report.initialMemoryMB);
             break;
         }
         if (userRet != 0) {
@@ -82,6 +95,7 @@ void PerfProfilerWorker::process() {
             report.exceptionLog = "UserMain 第 " + std::to_string(i) + " 次返回非 0: " + std::to_string(userRet)
                 + " [" + blob.summary + "]";
             emit logMessage("ERROR: " + qUtf8(report.exceptionLog));
+            emit progressUpdated(i + 1, report.totalSteps, elapsedMs, report.initialMemoryMB);
             break;
         }
 
@@ -95,7 +109,7 @@ void PerfProfilerWorker::process() {
         const bool memCheckNow = (report.completedSteps % kMemoryCheckEvery == 0) || sampleNow;
         if (sampleNow || memCheckNow) {
             ProcessMemoryStats curMem = MemoryUtils::GetCurrentProcessMemory();
-            double curMB = MemoryUtils::BytesToMB(curMem.workingSetBytes);
+            double curMB = footprintMB(curMem);
             if (sampleNow) {
                 PerfSample s;
                 s.stepIndex = i;
@@ -103,12 +117,12 @@ void PerfProfilerWorker::process() {
                 s.memoryMB = curMB;
                 report.samples.push_back(s);
                 emit sampleAdded(i, elapsedMs, curMB);
-                emit progressUpdated(i + 1, report.totalSteps, elapsedMs, curMB);
             }
+            emit progressUpdated(i + 1, report.totalSteps, elapsedMs, curMB);
             if (memoryCapEnabled && curMB - report.initialMemoryMB >= maxMemoryDeltaMB) {
                 report.abortedDueToMemory = true;
                 emit logMessage(QString(
-                    "WARN: 工作集已增长超过 %1 MB（当前 %2 MB），提前结束压测以避免卡死/OOM；"
+                    "WARN: 进程内存已增长超过 %1 MB（当前足迹 %2 MB），提前结束压测以避免 OOM 闪退；"
                     "已完成 %3/%4 次，按已完成次数推算泄漏率")
                     .arg(maxMemoryDeltaMB, 0, 'f', 0)
                     .arg(curMB, 0, 'f', 1)
@@ -117,10 +131,21 @@ void PerfProfilerWorker::process() {
                 break;
             }
         }
+
+        const double wallSec = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - wallStart).count();
+        if (wallSec >= kMaxWallClockSec) {
+            emit logMessage(QStringLiteral(
+                "WARN: 压测已运行 %1 秒，达到单型号时限，提前结束（已完成 %2/%3 次）")
+                .arg(wallSec, 0, 'f', 1)
+                .arg(report.completedSteps)
+                .arg(report.totalSteps));
+            break;
+        }
     }
 
     ProcessMemoryStats finalMem = MemoryUtils::GetCurrentProcessMemory();
-    report.finalMemoryMB = MemoryUtils::BytesToMB(finalMem.workingSetBytes);
+    report.finalMemoryMB = footprintMB(finalMem);
     report.memoryDeltaMB = report.finalMemoryMB - report.initialMemoryMB;
 
     if (report.completedSteps > 0) {

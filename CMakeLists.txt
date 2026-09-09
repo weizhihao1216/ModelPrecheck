@@ -146,6 +146,34 @@ add_executable(MultiObjectHarnessSmoke EXCLUDE_FROM_ALL
 target_compile_definitions(MultiObjectHarnessSmoke PRIVATE NOMINMAX)
 target_link_libraries(MultiObjectHarnessSmoke PRIVATE Qt5::Core psapi.lib)
 
+# Static precheck path smoke (PackageScanner + Header/Lib/PE) — no LoadLibrary.
+add_executable(StaticPrecheckSmoke EXCLUDE_FROM_ALL
+    tests/StaticPrecheckSmoke.cpp
+    src/core/PackageScanner.cpp
+    src/core/HeaderAnalyzer.cpp
+    src/core/LibAnalyzer.cpp
+    src/core/PeAnalyzer.cpp
+    src/core/DllLoader.cpp
+    src/utils/MemoryUtils.cpp
+    src/utils/SehHelper.cpp
+)
+target_compile_definitions(StaticPrecheckSmoke PRIVATE NOMINMAX)
+target_link_libraries(StaticPrecheckSmoke PRIVATE Qt5::Core psapi.lib)
+
+add_executable(SampleModelsMatrix EXCLUDE_FROM_ALL
+    tests/SampleModelsMatrix.cpp
+    src/core/PackageScanner.cpp
+    src/core/HeaderAnalyzer.cpp
+    src/core/LibAnalyzer.cpp
+    src/core/PeAnalyzer.cpp
+    src/core/DllLoader.cpp
+    src/core/PrecheckSummary.cpp
+    src/utils/MemoryUtils.cpp
+    src/utils/SehHelper.cpp
+)
+target_compile_definitions(SampleModelsMatrix PRIVATE NOMINMAX)
+target_link_libraries(SampleModelsMatrix PRIVATE Qt5::Core psapi.lib)
+
 # Install configuration (Default target directory: ${CMAKE_SOURCE_DIR}/dist)
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX "${CMAKE_SOURCE_DIR}/dist" CACHE PATH "Install path prefix" FORCE)

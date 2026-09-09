@@ -125,6 +125,19 @@ QStringList HeaderFilesFromPackage(const QString& packageDir) {
     return paths;
 }
 
+void WritePrecheckTrail(const QString& stage) {
+    const QString path = QDir(QCoreApplication::applicationDirPath())
+        .filePath(QStringLiteral("precheck_crash_trail.txt"));
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+        return;
+    const QByteArray line = QStringLiteral("%1 | %2\n")
+        .arg(QDateTime::currentDateTime().toString(Qt::ISODate), stage)
+        .toUtf8();
+    f.write(line);
+    f.flush();
+}
+
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent)
@@ -3814,6 +3827,7 @@ DualBuildPrecheckReport MainWindow::precheckOneModel(const FleetModelEntry& entr
     dual.timestamp = qToUtf8(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
 
     QString pkgDir = entry.packageDir.trimmed();
+    WritePrecheckTrail(QStringLiteral("precheckOneModel begin: %1").arg(entry.name));
     if (pkgDir.isEmpty() || !QDir(pkgDir).exists()) {
         logMessage(QString("ERROR: 型号「%1」模型包路径无效: %2").arg(entry.name, pkgDir));
         dual.overallPass = false;
@@ -3823,6 +3837,7 @@ DualBuildPrecheckReport MainWindow::precheckOneModel(const FleetModelEntry& entr
     logMessage("================================================================================");
     logMessage(QString("INFO: 型号「%1」全覆盖预检: %2").arg(entry.name, pkgDir));
 
+    WritePrecheckTrail(QStringLiteral("scan package: %1").arg(pkgDir));
     ModelPackageFiles pkgFiles = PackageScanner::ScanPackageDirectory(qToUtf8(pkgDir));
     dual.packageFiles = pkgFiles;
     for (const auto& msg : pkgFiles.scanLog) {
@@ -3852,8 +3867,11 @@ DualBuildPrecheckReport MainWindow::precheckOneModel(const FleetModelEntry& entr
 
     logMessage("--------------------------------------------------------------------------------");
     logMessage("INFO: 阶段 1/3: 头文件预检 (" + QString::number(pkgFiles.allHeaderFiles.size()) + " 个)...");
+    WritePrecheckTrail(QStringLiteral("headers stage: %1 count=%2")
+        .arg(entry.name).arg(pkgFiles.allHeaderFiles.size()));
     for (const auto& hPath : pkgFiles.allHeaderFiles) {
         logMessage(" -> 预检头文件: " + qUtf8(hPath));
+        WritePrecheckTrail(QStringLiteral("AnalyzeHeader: %1").arg(qUtf8(hPath)));
         HeaderAnalysisReport hRep = HeaderAnalyzer::AnalyzeHeader(hPath);
         for (const auto& msg : hRep.logMessages) {
             logMessage(qDecodeLog(msg));
@@ -3864,6 +3882,7 @@ DualBuildPrecheckReport MainWindow::precheckOneModel(const FleetModelEntry& entr
         dual.headerReports.push_back(hRep);
         combinedHeaderFuncs.insert(combinedHeaderFuncs.end(), hRep.declaredFunctions.begin(), hRep.declaredFunctions.end());
     }
+    WritePrecheckTrail(QStringLiteral("AnalyzeHeaderSet package: %1").arg(entry.name));
     dual.headerConflictReport = HeaderAnalyzer::AnalyzeHeaderSet(pkgFiles.allHeaderFiles);
     for (const auto& msg : dual.headerConflictReport.logMessages) {
         logMessage(qDecodeLog(msg));
@@ -3871,6 +3890,8 @@ DualBuildPrecheckReport MainWindow::precheckOneModel(const FleetModelEntry& entr
 
     logMessage("--------------------------------------------------------------------------------");
     logMessage("INFO: 阶段 2/3: LIB 库预检 (" + QString::number(pkgFiles.allLibFiles.size()) + " 个)...");
+    WritePrecheckTrail(QStringLiteral("libs stage: %1 count=%2")
+        .arg(entry.name).arg(pkgFiles.allLibFiles.size()));
     for (const auto& lPath : pkgFiles.allLibFiles) {
         logMessage(" -> 预检 LIB 库: " + qUtf8(lPath));
         LibAnalysisReport lRep = LibAnalyzer::AnalyzeLib(lPath);
@@ -3886,13 +3907,21 @@ DualBuildPrecheckReport MainWindow::precheckOneModel(const FleetModelEntry& entr
 
     logMessage("--------------------------------------------------------------------------------");
     logMessage("INFO: 阶段 3/3: DLL 动态库预检 (" + QString::number(pkgFiles.allDllFiles.size()) + " 个)...");
+    WritePrecheckTrail(QStringLiteral("dlls PE-only stage: %1 count=%2")
+        .arg(entry.name).arg(pkgFiles.allDllFiles.size()));
+    int dllLoadPassed = 0;
     for (const auto& dPath : pkgFiles.allDllFiles) {
         QFileInfo fi(qUtf8(dPath));
-        QString lowerPath = qUtf8(dPath).toLower();
-        QString configStr = "Release";
-        if (lowerPath.contains("/debug/") || lowerPath.contains("\\debug\\")
-            || fi.completeBaseName().endsWith("d", Qt::CaseInsensitive)) {
-            configStr = "Debug";
+        const bool isDebugDll = std::find(pkgFiles.debugDllFiles.begin(),
+                                          pkgFiles.debugDllFiles.end(),
+                                          dPath) != pkgFiles.debugDllFiles.end();
+        QString configStr = isDebugDll ? QStringLiteral("Debug") : QStringLiteral("Release");
+        if (!isDebugDll) {
+            QString lowerPath = qUtf8(dPath).toLower();
+            if (lowerPath.contains("/debug/") || lowerPath.contains("\\debug\\")
+                || fi.completeBaseName().endsWith("d", Qt::CaseInsensitive)) {
+                configStr = QStringLiteral("Debug");
+            }
         }
 
         logMessage(" -> 预检 DLL 动态库 [" + configStr + "]: " + qUtf8(dPath));
@@ -3900,10 +3929,44 @@ DualBuildPrecheckReport MainWindow::precheckOneModel(const FleetModelEntry& entr
         if (!matchedHeader.empty()) {
             logMessage("    关联头文件契约: " + qUtf8(matchedHeader));
         }
-        CombinedPrecheckReport dRep = runBuildPrecheck(dPath, matchedHeader, "", qToUtf8(configStr), qToUtf8(pkgDir));
-        dRep.headerConflictReport = dual.headerConflictReport;
-        if (dRep.overallPass) {
-            dual.passedDllCount++;
+
+        CombinedPrecheckReport dRep;
+        // Debug(/MDd) DLL 在 Release 宿主上 LoadLibrary 易 CRT/DllMain 闪退，只做 PE。
+        // Release DLL 在一键预检中实际加载，供「DLL 接口与加载」汇总。
+        const bool isDebugConfig = isDebugDll || configStr == QStringLiteral("Debug");
+        if (isDebugConfig) {
+            dRep.dllPath = dPath;
+            dRep.headerPath = matchedHeader;
+            dRep.buildConfig = qToUtf8(configStr);
+            dRep.timestamp = qToUtf8(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
+            std::vector<std::string> searchPaths;
+            if (!pkgDir.isEmpty()) {
+                const std::string pkg = qToUtf8(pkgDir);
+                searchPaths.push_back(pkg);
+                searchPaths.push_back(PackageScanner::ModelsDirectory(pkg));
+                searchPaths.push_back(PackageScanner::LibDirectory(pkg));
+                searchPaths.push_back(PackageScanner::IncludeDirectory(pkg));
+            }
+            WritePrecheckTrail(QStringLiteral("AnalyzeDll PE (skip load Debug): %1").arg(qUtf8(dPath)));
+            dRep.peReport = PeAnalyzer::AnalyzeDll(dPath, searchPaths, {});
+            dRep.loadReport.isLoaded = false;
+            dRep.loadReport.errorLog =
+                "SKIP: Release 宿主不对 Debug(/MDd) DLL 执行 LoadLibrary（避免 CRT/DllMain 闪退）；"
+                "请用 Debug 构建的预检工具或 Harness 验证 Debug 库";
+            dRep.overallPass = dRep.peReport.overallPass;
+            dRep.headerConflictReport = dual.headerConflictReport;
+            logMessage(QStringLiteral("INFO: Debug DLL 仅 PE [%1] — %2")
+                .arg(configStr, qUtf8(dPath)));
+            if (dRep.overallPass)
+                dual.passedDllCount++;
+        } else {
+            WritePrecheckTrail(QStringLiteral("Load Release DLL: %1").arg(qUtf8(dPath)));
+            dRep = runBuildPrecheck(dPath, matchedHeader, "", qToUtf8(configStr), qToUtf8(pkgDir));
+            dRep.headerConflictReport = dual.headerConflictReport;
+            if (dRep.overallPass)
+                dual.passedDllCount++;
+            if (dRep.loadReport.isLoaded)
+                ++dllLoadPassed;
         }
         dual.dllReports.push_back(dRep);
 
@@ -3923,11 +3986,19 @@ DualBuildPrecheckReport MainWindow::precheckOneModel(const FleetModelEntry& entr
         || (dual.passedHeaderCount == static_cast<int>(pkgFiles.allHeaderFiles.size()));
     bool libsPass = pkgFiles.allLibFiles.empty()
         || (dual.passedLibCount == static_cast<int>(pkgFiles.allLibFiles.size()));
-    bool dllsPass = pkgFiles.allDllFiles.empty()
-        || (dual.passedDllCount == static_cast<int>(pkgFiles.allDllFiles.size()));
+    // 动态加载只要求 Release DLL（Release 宿主）；Debug DLL 仅 PE，不参与 Load 成败。
+    bool dllsPass = true;
+    if (!pkgFiles.releaseDllFiles.empty()) {
+        dllsPass = (dllLoadPassed == static_cast<int>(pkgFiles.releaseDllFiles.size()));
+    } else if (!pkgFiles.allDllFiles.empty()) {
+        // 包内只有 Debug DLL：无法在 Release 宿主安全加载，以 PE 通过为准
+        dllsPass = (dual.passedDllCount == static_cast<int>(pkgFiles.allDllFiles.size()));
+    }
 
     dual.overallPass = headersPass && libsPass && dllsPass
         && dual.headerConflictReport.overallPass;
+    WritePrecheckTrail(QStringLiteral("precheckOneModel end: %1 pass=%2")
+        .arg(entry.name).arg(dual.overallPass ? 1 : 0));
     return dual;
 }
 
@@ -4180,7 +4251,16 @@ void MainWindow::runFullPrecheck() {
 
     ScopedBusyOverlay wait(this, QStringLiteral("正在执行一键预检，请稍候…"));
 
-    const int perfSteps = m_spnSteps->value();
+    const int perfStepsUi = m_spnSteps->value();
+    // 一键预检对每个已编译型号跑压测；UI 默认 10000 会导致长时间停在「性能/轨迹」。
+    // 单独「执行性能压测」仍用 UI 次数；一键预检封顶 300 次以保可完成性。
+    constexpr int kFullPrecheckPerfCap = 100;
+    const int perfSteps = qMin(perfStepsUi, kFullPrecheckPerfCap);
+    if (perfSteps < perfStepsUi) {
+        logMessage(QStringLiteral(
+            "INFO: 一键预检压测次数封顶为 %1（界面设置 %2；单独压测仍用界面次数）")
+            .arg(perfSteps).arg(perfStepsUi));
+    }
     const double perfHz = m_comboHz->currentData().toDouble();
     const double perfMemCapMB = m_spnPerfMemCapMB ? m_spnPerfMemCapMB->value() : 256.0;
     const int threadCount = m_spnThreadCount->value();
@@ -4193,6 +4273,13 @@ void MainWindow::runFullPrecheck() {
     int passedModels = 0;
 
     wait.run([&]{
+    {
+        const QString trail = QDir(QCoreApplication::applicationDirPath())
+            .filePath(QStringLiteral("precheck_crash_trail.txt"));
+        QFile::remove(trail);
+        WritePrecheckTrail(QStringLiteral("full precheck start models=%1")
+            .arg(m_models.size()));
+    }
     m_latestFleetReport = FleetSessionReport();
     m_latestFleetReport.timestamp = qToUtf8(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
 
@@ -4213,8 +4300,11 @@ void MainWindow::runFullPrecheck() {
                                modelReport.packageFiles.allHeaderFiles.begin(),
                                modelReport.packageFiles.allHeaderFiles.end());
     }
+    WritePrecheckTrail(QStringLiteral("cross-model AnalyzeHeaderSet count=%1")
+        .arg(allModelHeaders.size()));
     m_latestFleetReport.crossModelHeaderConflictReport =
         HeaderAnalyzer::AnalyzeHeaderSet(allModelHeaders);
+    WritePrecheckTrail(QStringLiteral("cross-model AnalyzeHeaderSet done"));
     for (const auto& msg : m_latestFleetReport.crossModelHeaderConflictReport.logMessages) {
         logMessage("跨型号 " + qDecodeLog(msg));
     }
@@ -4233,7 +4323,8 @@ void MainWindow::runFullPrecheck() {
     double weightedTimeSum = 0.0;
     for (int modelIndex : compiledIndexes) {
         FleetModelEntry& model = m_models[static_cast<size_t>(modelIndex)];
-        setBusyOverlayText(QStringLiteral("一键预检：性能/轨迹「%1」…").arg(model.name));
+        setBusyOverlayText(QStringLiteral("一键预检：性能/轨迹「%1」… 准备压测 %2 次")
+            .arg(model.name).arg(perfSteps));
         PerfProfileReport perf;
         PerfProfilerWorker worker(model.harness.get(), perfSteps, perfHz,
                                   static_cast<uint32_t>(modelIndex + 1), perfMemCapMB);
@@ -4278,6 +4369,8 @@ void MainWindow::runFullPrecheck() {
             dllReport.perfReport = perf;
         }
 
+        setBusyOverlayText(QStringLiteral("一键预检：性能/轨迹「%1」… 采集轨迹")
+            .arg(model.name));
         model.harness->SetTrajectoryCapture(true);
         RandomValueBlob sample = model.harness->Sample(static_cast<uint32_t>(1000 + modelIndex));
         int returnCode = 0;

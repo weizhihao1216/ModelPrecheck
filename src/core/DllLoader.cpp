@@ -1,6 +1,50 @@
 #include "DllLoader.h"
+#include "../utils/MemoryUtils.h"
 #include <chrono>
 #include <algorithm>
+#include <cstdio>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+namespace {
+
+std::wstring Utf8PathToWide(const std::string& utf8) {
+    if (utf8.empty()) return std::wstring();
+    const int n = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, nullptr, 0);
+    if (n <= 0) return std::wstring();
+    std::wstring wide(static_cast<size_t>(n - 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, &wide[0], n);
+    return wide;
+}
+
+HMODULE SafeLoadLibraryExW(const wchar_t* path, DWORD* outExc) {
+    if (!path) {
+        if (outExc) *outExc = static_cast<DWORD>(-1);
+        return nullptr;
+    }
+    __try {
+        if (outExc) *outExc = 0;
+        return LoadLibraryExW(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (outExc) *outExc = GetExceptionCode();
+        return nullptr;
+    }
+}
+
+BOOL SafeFreeLibrary(HMODULE mod, DWORD* outExc) {
+    if (!mod) return TRUE;
+    __try {
+        if (outExc) *outExc = 0;
+        return FreeLibrary(mod);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (outExc) *outExc = GetExceptionCode();
+        return FALSE;
+    }
+}
+
+} // namespace
 
 InterfaceMapping InterfaceMapping::DefaultSingleton() {
     InterfaceMapping m;
@@ -80,13 +124,30 @@ LoadResult DllLoader::Load(const std::string& dllPath, const InterfaceMapping& m
     m_mapping = mapping.entries.empty() ? InterfaceMapping::DefaultSingleton() : mapping;
     m_apiStyle = m_mapping.InferApiStyle();
 
-    std::wstring wPath(dllPath.begin(), dllPath.end());
+    const std::wstring wPath = Utf8PathToWide(dllPath);
+    if (wPath.empty()) {
+        result.isLoaded = false;
+        result.errorLog = "LoadLibraryExW failed: invalid UTF-8 DLL path";
+        return result;
+    }
+
     ProcessMemoryStats memBefore = MemoryUtils::GetCurrentProcessMemory();
-    m_hModule = LoadLibraryExW(wPath.c_str(), NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    DWORD loadExc = 0;
+    m_hModule = SafeLoadLibraryExW(wPath.c_str(), &loadExc);
     ProcessMemoryStats memAfter = MemoryUtils::GetCurrentProcessMemory();
     result.initialMemoryDeltaKB = MemoryUtils::BytesToKB(
         memAfter.workingSetBytes > memBefore.workingSetBytes ?
         (memAfter.workingSetBytes - memBefore.workingSetBytes) : 0);
+
+    if (loadExc != 0) {
+        result.isLoaded = false;
+        result.exceptionCode = loadExc;
+        char buf[32];
+        sprintf_s(buf, "0x%08X", loadExc);
+        result.errorLog = std::string("LoadLibraryExW raised SEH ") + buf;
+        m_hModule = nullptr;
+        return result;
+    }
 
     if (!m_hModule) {
         DWORD err = GetLastError();
@@ -126,8 +187,9 @@ LoadResult DllLoader::Load(const std::string& dllPath, const InterfaceMapping& m
 
 void DllLoader::Unload() {
     if (m_hModule) {
-        FreeLibrary(m_hModule);
-        m_hModule = NULL;
+        DWORD freeExc = 0;
+        SafeFreeLibrary(m_hModule, &freeExc);
+        m_hModule = nullptr;
     }
     m_bound.clear();
     m_apiStyle = ModelApiStyle::Unknown;
