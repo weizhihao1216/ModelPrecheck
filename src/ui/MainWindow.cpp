@@ -29,6 +29,11 @@
 #include <QHash>
 #include <QPair>
 #include <QIcon>
+#include <QScreen>
+#include <QPropertyAnimation>
+#include <QGraphicsColorizeEffect>
+#include <QGraphicsOpacityEffect>
+#include <QEasingCurve>
 
 #include "ChartViewerWidget.h"
 #include "TrajectoryViewWidget.h"
@@ -39,6 +44,11 @@
 #include <QEventLoop>
 #include <QStyle>
 #include <QCloseEvent>
+#include <QResizeEvent>
+#include <QAbstractButton>
+#include <QEvent>
+#include <QDialog>
+#include <QRegion>
 #include <QTimer>
 #include <algorithm>
 #include <functional>
@@ -49,12 +59,74 @@
 
 namespace {
 
+qreal UiScale() {
+    const QVariant value = qApp->property("modelPrecheckUiScale");
+    return value.isValid() ? qBound<qreal>(0.72, value.toDouble(), 1.0) : 1.0;
+}
+
+int UiPx(int value) {
+    if (value <= 0) return value;
+    return qMax(1, qRound(value * UiScale()));
+}
+
+qreal FittingPointSize(const QString& text, const QSize& available,
+                       const QFont& sourceFont, qreal maximumPt,
+                       qreal minimumPt, bool wordWrap) {
+    if (text.isEmpty() || available.width() <= 0 || available.height() <= 0)
+        return maximumPt;
+
+    for (qreal pointSize = maximumPt; pointSize >= minimumPt; pointSize -= 0.25) {
+        QFont font(sourceFont);
+        font.setPointSizeF(pointSize);
+        const QFontMetrics metrics(font);
+        if (!wordWrap && !text.contains(QLatin1Char('\n'))) {
+            if (metrics.horizontalAdvance(text) <= available.width() &&
+                metrics.height() <= available.height()) {
+                return pointSize;
+            }
+            continue;
+        }
+
+        const QRect bounds = metrics.boundingRect(
+            QRect(0, 0, available.width(), available.height()),
+            Qt::AlignCenter | Qt::TextWordWrap, text);
+        if (bounds.width() <= available.width() && bounds.height() <= available.height())
+            return pointSize;
+    }
+    return minimumPt;
+}
+
+void ApplyAdaptivePointSize(QWidget* widget, const QString& selector, qreal pointSize) {
+    if (!widget) return;
+    const qreal previous = widget->property("adaptivePointSize").toDouble();
+    if (widget->property("adaptivePointSize").isValid() &&
+        qAbs(previous - pointSize) < 0.01) {
+        return;
+    }
+
+    const char* baseStyleProperty = "adaptiveBaseStyleSheet";
+    if (!widget->property(baseStyleProperty).isValid())
+        widget->setProperty(baseStyleProperty, widget->styleSheet());
+    const QString baseStyle = widget->property(baseStyleProperty).toString();
+    widget->setStyleSheet(baseStyle + QStringLiteral(
+        "\n%1 { font-size: %2pt; }").arg(selector).arg(pointSize, 0, 'f', 2));
+
+    QFont font = widget->font();
+    font.setPointSizeF(pointSize);
+    widget->setFont(font);
+    widget->setProperty("adaptivePointSize", pointSize);
+}
+
 void FitButtonText(QPushButton* btn) {
     if (!btn) return;
     btn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
-    btn->setMinimumHeight(28);
-    const int w = btn->fontMetrics().boundingRect(btn->text()).width() + 28;
-    btn->setMinimumWidth(qMax(w, 72));
+    btn->ensurePolished();
+    const QFontMetrics metrics = btn->fontMetrics();
+    // The shared style reserves 6 px above and below the text plus borders.
+    btn->setMinimumHeight(qMax(UiPx(28), metrics.height() + 16));
+    // Includes the horizontal padding used by both normal and primary buttons.
+    const int w = metrics.horizontalAdvance(btn->text()) + UiPx(44);
+    btn->setMinimumWidth(qMax(w, UiPx(72)));
 }
 
 /** RAII wrapper for non-modal busy overlay during blocking work. */
@@ -148,7 +220,11 @@ MainWindow::MainWindow(QWidget* parent)
     qRegisterMetaType<ConcurrencyTestReport>("ConcurrencyTestReport");
 
     setWindowTitle("第三方武器模型 DLL 集成预检工具 (Model Verification) v1.1");
-    resize(1440, 900);
+    const QRect available = QApplication::primaryScreen()
+        ? QApplication::primaryScreen()->availableGeometry()
+        : QRect(0, 0, 1440, 900);
+    resize(qMin(UiPx(1440), available.width()),
+           qMin(UiPx(900), available.height()));
 
     QWidget* centralWidget = new QWidget(this);
     setCentralWidget(centralWidget);
@@ -161,10 +237,10 @@ MainWindow::MainWindow(QWidget* parent)
     QGroupBox* grpTop = new QGroupBox("预检控制", this);
     QHBoxLayout* layoutTop = new QHBoxLayout(grpTop);
 
-    m_btnRunPrecheck = new QPushButton("一键预检全部型号", this);
+    m_btnRunPrecheck = new QPushButton("一键预检", this);
     m_btnRunPrecheck->setStyleSheet(
         "QPushButton { background-color: #0d9488; color: #ffffff; font-family: \"Microsoft YaHei UI\"; "
-        "font-weight: bold; font-size: 13px; "
+        "font-weight: bold; "
         "padding: 8px 18px; border-radius: 4px; border: 1px solid #14b8a6; } "
         "QPushButton:hover { background-color: #fbbf24; color: #1c1917; border-color: #fbbf24; } "
         "QPushButton:pressed { background-color: #0f766e; }");
@@ -177,47 +253,24 @@ MainWindow::MainWindow(QWidget* parent)
     layoutTop->addWidget(m_btnExportReport);
     layoutTop->addStretch(1);
 
-    // --- Status Indicator Bar ---
-    QHBoxLayout* layoutBadges = new QHBoxLayout();
-    m_lblHeaderStatus = new QLabel("头文件预检: N/A", this);
-    m_lblLibStatus = new QLabel("LIB 库预检: N/A", this);
-    m_lblDllStatus = new QLabel("DLL 动态库预检: N/A", this);
-    m_lblBuildConfigStatus = new QLabel("Release/Debug: N/A", this);
-
-    QString baseBadgeStyle =
-        "QLabel { padding: 4px 14px; border-radius: 12px; font-weight: bold; font-size: 12px; "
-        "background-color: #e5eef7; color: #003986; border: 1px solid #b0c4de; }";
-    m_lblHeaderStatus->setStyleSheet(baseBadgeStyle);
-    m_lblLibStatus->setStyleSheet(baseBadgeStyle);
-    m_lblDllStatus->setStyleSheet(baseBadgeStyle);
-    m_lblBuildConfigStatus->setStyleSheet(baseBadgeStyle);
-    m_lblHeaderStatus->setMinimumWidth(140);
-    m_lblLibStatus->setMinimumWidth(140);
-    m_lblDllStatus->setMinimumWidth(160);
-    m_lblBuildConfigStatus->setMinimumWidth(200);
-    m_lblBuildConfigStatus->setToolTip(
-        QStringLiteral("对照集成问题：编译 Debug 报错、Release 成功（厂家常不提供 Debug 库）"));
-
-    layoutBadges->addWidget(m_lblHeaderStatus);
-    layoutBadges->addWidget(m_lblLibStatus);
-    layoutBadges->addWidget(m_lblDllStatus);
-    layoutBadges->addWidget(m_lblBuildConfigStatus);
-    layoutBadges->addStretch(1);
-
     // --- Guided workflow: always shows where the user is and what comes next ---
     QGroupBox* grpWorkflow = new QGroupBox("操作流程", this);
     QVBoxLayout* workflowLayout = new QVBoxLayout(grpWorkflow);
     QHBoxLayout* workflowStepsLayout = new QHBoxLayout();
     const QStringList workflowNames = {
         "1 添加型号", "2 选择模型包", "3 配置 UserMain",
-        "4 编译型号", "5 执行测试", "6 查看报告"
+        "4 编译型号",
+        "5 执行测试", "6 查看报告"
     };
     for (const QString& name : workflowNames) {
         QLabel* step = new QLabel(name, grpWorkflow);
         step->setAlignment(Qt::AlignCenter);
+        step->setWordWrap(true);
         step->setProperty("workflowStep", true);
+        step->setProperty("primaryWorkflowStep", true);
         step->setProperty("stepState", "pending");
-        step->setMinimumHeight(32);
+        step->setMinimumWidth(0);
+        step->setMinimumHeight(UiPx(name.contains(QLatin1Char('\n')) ? 44 : 32));
         workflowStepsLayout->addWidget(step, 1);
         m_workflowSteps.push_back(step);
     }
@@ -233,6 +286,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     // ========== Far left: fixed full-height test navigation ==========
     QGroupBox* grpNavigation = new QGroupBox("功能导航", this);
+    m_grpNavigation = grpNavigation;
     QVBoxLayout* navigationLayout = new QVBoxLayout(grpNavigation);
     m_listTestNavigation = new QListWidget(grpNavigation);
     const QStringList navTitles = {
@@ -275,14 +329,15 @@ MainWindow::MainWindow(QWidget* parent)
         cellLay->setContentsMargins(0, 0, 0, 0);
         cellLay->setSpacing(0);
         auto* lbl = new QLabel(text, cell);
+        lbl->setProperty("navLegendText", true);
         lbl->setAlignment(Qt::AlignHCenter | Qt::AlignBottom);
         lbl->setStyleSheet(QStringLiteral(
-            "QLabel { color: #ffffff; font-weight: bold; font-size: 13px;"
+            "QLabel { color: #ffffff; font-weight: bold;"
             " padding: 0; margin: 0; }"));
         lbl->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
         auto* line = new QFrame(cell);
         line->setFrameShape(QFrame::NoFrame);
-        line->setFixedHeight(2);
+        line->setFixedHeight(UiPx(2));
         line->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         line->setStyleSheet(QStringLiteral(
             "QFrame { background-color: %1; border: none; margin: 0; padding: 0; }")
@@ -376,27 +431,36 @@ MainWindow::MainWindow(QWidget* parent)
 
     m_listHarnessHeaders = new QListWidget(this);
     m_listHarnessHeaders->setSelectionMode(QAbstractItemView::NoSelection);
-    m_listHarnessHeaders->setMinimumHeight(80);
-    m_listHarnessHeaders->setMaximumHeight(120);
+    m_listHarnessHeaders->setMinimumHeight(UiPx(80));
+    m_listHarnessHeaders->setMaximumHeight(UiPx(120));
     detailLayout->addWidget(m_listHarnessHeaders);
 
+    QHBoxLayout* userMainTitleRow = new QHBoxLayout();
     QLabel* userMainTitle = new QLabel("步骤 3.2：编写 UserMain 函数体", this);
     userMainTitle->setProperty("sectionTitle", true);
-    detailLayout->addWidget(userMainTitle);
+    userMainTitleRow->addWidget(userMainTitle);
+    userMainTitleRow->addStretch(1);
+    m_btnCompileCurrent = new QPushButton("编译当前型号", m_modelDetailPanel);
+    m_btnCompileAll = new QPushButton("编译全部型号", m_modelDetailPanel);
+    FitButtonText(m_btnCompileCurrent);
+    FitButtonText(m_btnCompileAll);
+    userMainTitleRow->addWidget(m_btnCompileCurrent);
+    userMainTitleRow->addWidget(m_btnCompileAll);
+    detailLayout->addLayout(userMainTitleRow);
 
     QSplitter* userMainSplitter = new QSplitter(Qt::Vertical, this);
     userMainSplitter->setObjectName(QStringLiteral("userMainSplitter"));
     userMainSplitter->setChildrenCollapsible(false);
-    userMainSplitter->setHandleWidth(6);
+    userMainSplitter->setHandleWidth(UiPx(6));
 
     m_editUserMain = new CppCodeEditor(userMainSplitter);
-    m_editUserMain->setMinimumHeight(80);
+    m_editUserMain->setMinimumHeight(UiPx(80));
     m_editUserMain->setMaximumHeight(QWIDGETSIZE_MAX);
     m_editUserMain->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     QWidget* userMainBelow = new QWidget(userMainSplitter);
     // Match multi-object page lower pane minimum so the editor can drag similarly.
-    userMainBelow->setMinimumHeight(160);
+    userMainBelow->setMinimumHeight(UiPx(160));
     userMainBelow->setMaximumHeight(QWIDGETSIZE_MAX);
     QVBoxLayout* belowLayout = new QVBoxLayout(userMainBelow);
     belowLayout->setContentsMargins(0, 4, 0, 0);
@@ -419,13 +483,13 @@ MainWindow::MainWindow(QWidget* parent)
     m_tblRandomVars->setObjectName(QStringLiteral("randomVarsTable"));
     m_tblRandomVars->setHorizontalHeaderLabels({ "启用", "变量名", "类型", "最小值", "最大值" });
     m_tblRandomVars->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    m_tblRandomVars->horizontalHeader()->setMinimumSectionSize(48);
-    m_tblRandomVars->horizontalHeader()->setFixedHeight(28);
+    m_tblRandomVars->horizontalHeader()->setMinimumSectionSize(UiPx(48));
+    m_tblRandomVars->horizontalHeader()->setFixedHeight(UiPx(28));
     m_tblRandomVars->verticalHeader()->setVisible(false);
-    m_tblRandomVars->verticalHeader()->setDefaultSectionSize(28);
+    m_tblRandomVars->verticalHeader()->setDefaultSectionSize(UiPx(28));
     m_tblRandomVars->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
-    m_tblRandomVars->setMinimumHeight(160);
-    m_tblRandomVars->setMaximumHeight(280);
+    m_tblRandomVars->setMinimumHeight(UiPx(160));
+    m_tblRandomVars->setMaximumHeight(UiPx(280));
     m_tblRandomVars->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     m_tblRandomVars->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_tblRandomVars->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -433,20 +497,10 @@ MainWindow::MainWindow(QWidget* parent)
     m_tblRandomVars->setShowGrid(true);
     belowLayout->addWidget(m_tblRandomVars, /*stretch*/ 1);
 
-    QHBoxLayout* layoutCompile = new QHBoxLayout();
-    m_btnCompileCurrent = new QPushButton("步骤 4：编译当前型号", userMainBelow);
-    m_btnCompileAll = new QPushButton("编译全部型号", userMainBelow);
-    FitButtonText(m_btnCompileCurrent);
-    FitButtonText(m_btnCompileAll);
-    layoutCompile->addWidget(m_btnCompileCurrent);
-    layoutCompile->addWidget(m_btnCompileAll);
-    layoutCompile->addStretch(1);
-    belowLayout->addLayout(layoutCompile, 0);
-
     m_lblHarnessStatus = new QLabel("Harness: 未编译", userMainBelow);
     m_lblHarnessStatus->setObjectName(QStringLiteral("harnessStatusLabel"));
     m_lblHarnessStatus->setWordWrap(false);
-    m_lblHarnessStatus->setFixedHeight(28);
+    m_lblHarnessStatus->setFixedHeight(UiPx(28));
     m_lblHarnessStatus->setMinimumWidth(0);
     m_lblHarnessStatus->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_lblHarnessStatus->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
@@ -459,12 +513,12 @@ MainWindow::MainWindow(QWidget* parent)
     // Same stretch / initial sizes / drag sync as multi-object code editor splitter.
     userMainSplitter->setStretchFactor(0, 2);
     userMainSplitter->setStretchFactor(1, 3);
-    userMainSplitter->setSizes({ 260, 720 });
+    userMainSplitter->setSizes({ UiPx(260), UiPx(720) });
     auto syncUserMainSplitterHeight = [userMainSplitter]() {
         const QList<int> sizes = userMainSplitter->sizes();
         int total = userMainSplitter->handleWidth() * qMax(0, sizes.size() - 1);
         for (int size : sizes) total += size;
-        userMainSplitter->setMinimumHeight(qMax(total, 200));
+        userMainSplitter->setMinimumHeight(qMax(total, UiPx(200)));
     };
     QObject::connect(userMainSplitter, &QSplitter::splitterMoved,
                      userMainSplitter, syncUserMainSplitterHeight);
@@ -491,7 +545,7 @@ MainWindow::MainWindow(QWidget* parent)
     layoutHeaderPick->addWidget(m_comboHeaderModel);
     layoutHeaderPick->addWidget(new QLabel(QStringLiteral("头文件:"), tabHeader));
     m_comboHeaderFile = new QComboBox(tabHeader);
-    m_comboHeaderFile->setMinimumWidth(320);
+    m_comboHeaderFile->setMinimumWidth(UiPx(320));
     layoutHeaderPick->addWidget(m_comboHeaderFile, 1);
     m_btnCheckHeader = new QPushButton(QStringLiteral("检查本项"), tabHeader);
     FitButtonText(m_btnCheckHeader);
@@ -539,7 +593,7 @@ MainWindow::MainWindow(QWidget* parent)
     layoutLibPick->addWidget(m_comboLibModel);
     layoutLibPick->addWidget(new QLabel(QStringLiteral("LIB 文件:"), tabLib));
     m_comboLibFile = new QComboBox(tabLib);
-    m_comboLibFile->setMinimumWidth(320);
+    m_comboLibFile->setMinimumWidth(UiPx(320));
     layoutLibPick->addWidget(m_comboLibFile, 1);
     m_btnCheckLib = new QPushButton(QStringLiteral("检查本项"), tabLib);
     FitButtonText(m_btnCheckLib);
@@ -567,12 +621,12 @@ MainWindow::MainWindow(QWidget* parent)
     QHBoxLayout* layoutPePick = new QHBoxLayout();
     layoutPePick->addWidget(new QLabel("型号:", this));
     m_comboPeModel = new QComboBox(this);
-    m_comboPeModel->setMinimumWidth(160);
+    m_comboPeModel->setMinimumWidth(UiPx(160));
     m_comboPeModel->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     layoutPePick->addWidget(m_comboPeModel);
     layoutPePick->addWidget(new QLabel("DLL:", this));
     m_comboPeDll = new QComboBox(this);
-    m_comboPeDll->setMinimumWidth(280);
+    m_comboPeDll->setMinimumWidth(UiPx(280));
     m_comboPeDll->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     layoutPePick->addWidget(m_comboPeDll, 1);
     m_btnCheckDllFile = new QPushButton(QStringLiteral("检查本项"), tabPe);
@@ -615,12 +669,12 @@ MainWindow::MainWindow(QWidget* parent)
     QHBoxLayout* layoutLoadPick = new QHBoxLayout();
     layoutLoadPick->addWidget(new QLabel("型号:", tabLoad));
     m_comboLoadModel = new QComboBox(tabLoad);
-    m_comboLoadModel->setMinimumWidth(160);
+    m_comboLoadModel->setMinimumWidth(UiPx(160));
     m_comboLoadModel->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     layoutLoadPick->addWidget(m_comboLoadModel);
     layoutLoadPick->addWidget(new QLabel("DLL 路径:", tabLoad));
     m_comboLoadDll = new QComboBox(tabLoad);
-    m_comboLoadDll->setMinimumWidth(280);
+    m_comboLoadDll->setMinimumWidth(UiPx(280));
     m_comboLoadDll->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     layoutLoadPick->addWidget(m_comboLoadDll, 1);
     m_btnCheckDllLoad = new QPushButton(QStringLiteral("检查本项"), tabLoad);
@@ -659,7 +713,7 @@ MainWindow::MainWindow(QWidget* parent)
     QHBoxLayout* layoutPerfModel = new QHBoxLayout();
     layoutPerfModel->addWidget(new QLabel("型号:", tabPerf));
     m_comboStressModel = new QComboBox(this);
-    m_comboStressModel->setMinimumWidth(180);
+    m_comboStressModel->setMinimumWidth(UiPx(180));
     m_comboStressModel->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     layoutPerfModel->addWidget(m_comboStressModel);
     layoutPerfModel->addStretch(1);
@@ -673,7 +727,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_spnSteps->setRange(100, 100000);
     m_spnSteps->setValue(10000);
     m_spnSteps->setSingleStep(1000);
-    m_spnSteps->setMinimumWidth(90);
+    m_spnSteps->setMinimumWidth(UiPx(90));
     layoutPerfCtrl->addWidget(m_spnSteps);
 
     layoutPerfCtrl->addWidget(new QLabel("频率目标:", this));
@@ -681,7 +735,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_comboHz->addItem("50 Hz (Budget: 20ms)", 50.0);
     m_comboHz->addItem("100 Hz (Budget: 10ms)", 100.0);
     m_comboHz->addItem("1000 Hz (Budget: 1ms)", 1000.0);
-    m_comboHz->setMinimumWidth(180);
+    m_comboHz->setMinimumWidth(UiPx(180));
     layoutPerfCtrl->addWidget(m_comboHz);
 
     layoutPerfCtrl->addWidget(new QLabel(QStringLiteral("内存上限(MB):"), m_perfOptionsPanel));
@@ -689,7 +743,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_spnPerfMemCapMB->setRange(0, 65536);
     m_spnPerfMemCapMB->setValue(256);
     m_spnPerfMemCapMB->setSingleStep(64);
-    m_spnPerfMemCapMB->setMinimumWidth(80);
+    m_spnPerfMemCapMB->setMinimumWidth(UiPx(80));
     m_spnPerfMemCapMB->setToolTip(QStringLiteral(
         "工作集相对压测起点的增长上限；超过则提前结束并按已完成次数推算泄漏率。\n"
         "0 = 不限制（跑满重复次数）。默认 256。"));
@@ -711,13 +765,13 @@ MainWindow::MainWindow(QWidget* parent)
         QStringLiteral("轨迹输出: out_lat / out_lon = (未试跑)"), this);
     m_lblTrajOut->setWordWrap(true);
     m_lblTrajOut->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
-    m_lblTrajOut->setMaximumHeight(40);
+    m_lblTrajOut->setMaximumHeight(UiPx(40));
 
     m_pChartViewer = new ChartViewerWidget(this);
     m_pTrajectoryView = new TrajectoryViewWidget(this);
     // Height comes from hardcoded layout stretch (5:4 ≈ chart 6:3 × 5/6); no max-height gap.
-    m_pTrajectoryView->setMinimumHeight(160);
-    m_pTrajectoryView->setMinimumWidth(280);
+    m_pTrajectoryView->setMinimumHeight(UiPx(160));
+    m_pTrajectoryView->setMinimumWidth(UiPx(280));
 
     m_tblTrajectoryPoints = new QTableWidget(0, 3, this);
     m_tblTrajectoryPoints->setHorizontalHeaderLabels({ "序号", "纬度 Lat", "经度 Lon" });
@@ -725,7 +779,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_tblTrajectoryPoints->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_tblTrajectoryPoints->setSelectionMode(QAbstractItemView::SingleSelection);
     m_tblTrajectoryPoints->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_tblTrajectoryPoints->setMinimumWidth(220);
+    m_tblTrajectoryPoints->setMinimumWidth(UiPx(220));
     m_tblTrajectoryPoints->setAlternatingRowColors(true);
 
     m_splitterPerf = new QSplitter(Qt::Vertical, this);
@@ -780,7 +834,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_tblFleetCounts->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_tblFleetCounts->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_tblFleetCounts->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_tblFleetCounts->setMinimumHeight(160);
+    m_tblFleetCounts->setMinimumHeight(UiPx(160));
     layoutTabMultiModel->addWidget(m_tblFleetCounts);
 
     QHBoxLayout* layoutFleetRun = new QHBoxLayout();
@@ -813,7 +867,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     layoutThrCtrl->addWidget(new QLabel("型号:", this));
     m_comboThreadModel = new QComboBox(this);
-    m_comboThreadModel->setMinimumWidth(180);
+    m_comboThreadModel->setMinimumWidth(UiPx(180));
     m_comboThreadModel->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     layoutThrCtrl->addWidget(m_comboThreadModel);
 
@@ -821,7 +875,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_spnThreadCount = new QSpinBox(this);
     m_spnThreadCount->setRange(1, 64);
     m_spnThreadCount->setValue(4);
-    m_spnThreadCount->setMinimumWidth(70);
+    m_spnThreadCount->setMinimumWidth(UiPx(70));
     layoutThrCtrl->addWidget(m_spnThreadCount);
     m_btnRunMultiThread = new QPushButton("执行多线程测试", this);
     FitButtonText(m_btnRunMultiThread);
@@ -871,15 +925,15 @@ MainWindow::MainWindow(QWidget* parent)
 
     QSplitter* multiObjectPageSplitter = new QSplitter(Qt::Vertical, tabMultiObject);
     multiObjectPageSplitter->setChildrenCollapsible(false);
-    multiObjectPageSplitter->setHandleWidth(6);
+    multiObjectPageSplitter->setHandleWidth(UiPx(6));
 
     m_editUserMultiObject = new CppCodeEditor(multiObjectPageSplitter);
-    m_editUserMultiObject->setMinimumHeight(80);
+    m_editUserMultiObject->setMinimumHeight(UiPx(80));
     m_editUserMultiObject->setMaximumHeight(QWIDGETSIZE_MAX);
     m_editUserMultiObject->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     QWidget* multiObjectRest = new QWidget(multiObjectPageSplitter);
-    multiObjectRest->setMinimumHeight(160);
+    multiObjectRest->setMinimumHeight(UiPx(160));
     QVBoxLayout* multiObjectRestLayout = new QVBoxLayout(multiObjectRest);
     multiObjectRestLayout->setContentsMargins(0, 4, 0, 0);
     multiObjectRestLayout->setSpacing(8);
@@ -993,8 +1047,8 @@ MainWindow::MainWindow(QWidget* parent)
     m_tblFleetMultiObjectModels->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     m_tblFleetMultiObjectModels->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     m_tblFleetMultiObjectModels->verticalHeader()->setVisible(false);
-    m_tblFleetMultiObjectModels->setMinimumHeight(72);
-    m_tblFleetMultiObjectModels->setMaximumHeight(140);
+    m_tblFleetMultiObjectModels->setMinimumHeight(UiPx(72));
+    m_tblFleetMultiObjectModels->setMaximumHeight(UiPx(140));
     m_tblFleetMultiObjectModels->setSelectionMode(QAbstractItemView::NoSelection);
     multiObjectRestLayout->addWidget(m_tblFleetMultiObjectModels);
 
@@ -1012,7 +1066,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_pMultiObjectTrajectory->setEmptyHint(
         QStringLiteral("暂无轨迹点\n请先编译多对象 Harness，再执行单型号或跨型号交错测试\n"
                        "轨迹通过 MoStep 中的 out_lat / out_lon 显示"));
-    m_pMultiObjectTrajectory->setMinimumHeight(180);
+    m_pMultiObjectTrajectory->setMinimumHeight(UiPx(180));
     m_tblMultiObjectResults = new QTableWidget(0, 8, multiObjectSplitter);
     m_tblMultiObjectResults->setHorizontalHeaderLabels({
         QStringLiteral("型号"), QStringLiteral("对象"), QStringLiteral("基线点"),
@@ -1023,13 +1077,13 @@ MainWindow::MainWindow(QWidget* parent)
     m_tblMultiObjectResults->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_tblMultiObjectResults->setSelectionMode(QAbstractItemView::SingleSelection);
     m_tblMultiObjectResults->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_tblMultiObjectResults->setMinimumHeight(100);
+    m_tblMultiObjectResults->setMinimumHeight(UiPx(100));
     multiObjectSplitter->addWidget(m_pMultiObjectTrajectory);
     multiObjectSplitter->addWidget(m_tblMultiObjectResults);
     multiObjectSplitter->setChildrenCollapsible(false);
     multiObjectSplitter->setStretchFactor(0, 3);
     multiObjectSplitter->setStretchFactor(1, 2);
-    multiObjectSplitter->setSizes({ 420, 240 });
+    multiObjectSplitter->setSizes({ UiPx(420), UiPx(240) });
     multiObjectRestLayout->addWidget(multiObjectSplitter, 1);
 
     multiObjectPageSplitter->addWidget(m_editUserMultiObject);
@@ -1037,12 +1091,12 @@ MainWindow::MainWindow(QWidget* parent)
     multiObjectPageSplitter->setStretchFactor(0, 2);
     multiObjectPageSplitter->setStretchFactor(1, 3);
     // Keep code editor initial height; grow the lower rest panel for trajectory/table.
-    multiObjectPageSplitter->setSizes({ 260, 720 });
+    multiObjectPageSplitter->setSizes({ UiPx(260), UiPx(720) });
     auto syncMultiObjectPageSplitterHeight = [multiObjectPageSplitter]() {
         const QList<int> sizes = multiObjectPageSplitter->sizes();
         int total = multiObjectPageSplitter->handleWidth() * qMax(0, sizes.size() - 1);
         for (int size : sizes) total += size;
-        multiObjectPageSplitter->setMinimumHeight(qMax(total, 200));
+        multiObjectPageSplitter->setMinimumHeight(qMax(total, UiPx(200)));
     };
     QObject::connect(multiObjectPageSplitter, &QSplitter::splitterMoved,
                      multiObjectPageSplitter, syncMultiObjectPageSplitterHeight);
@@ -1081,7 +1135,7 @@ MainWindow::MainWindow(QWidget* parent)
     emptyState->setAlignment(Qt::AlignCenter);
     emptyState->setWordWrap(true);
     emptyState->setTextFormat(Qt::RichText);
-    emptyState->setMinimumHeight(260);
+    emptyState->setMinimumHeight(UiPx(260));
     emptyState->setProperty("emptyWorkflow", true);
     m_emptyWorkflowPanel = emptyState;
 
@@ -1095,11 +1149,11 @@ MainWindow::MainWindow(QWidget* parent)
     m_testSectionTitle->setProperty("pageSectionTitle", true);
     testSectionLayout->addWidget(m_testSectionTitle);
     // Cap 测试工作区 height; content scrolls inside workflow when taller.
-    m_pCentralTabs->setMinimumHeight(480);
-    m_pCentralTabs->setMaximumHeight(1500);
+    m_pCentralTabs->setMinimumHeight(UiPx(480));
+    m_pCentralTabs->setMaximumHeight(UiPx(1500));
     m_pCentralTabs->tabBar()->hide();
     testSectionLayout->addWidget(m_pCentralTabs);
-    m_testSection->setMaximumHeight(1500);
+    m_testSection->setMaximumHeight(UiPx(1500));
     m_testSection->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
 
     workflowPageLayout->addWidget(m_emptyWorkflowPanel);
@@ -1113,14 +1167,14 @@ MainWindow::MainWindow(QWidget* parent)
     m_workflowScroll->setFrameShape(QFrame::NoFrame);
     m_workflowScroll->setWidget(workflowPage);
 
-    grpNavigation->setFixedWidth(205);
-    grpModels->setMinimumWidth(210);
-    grpModels->setMaximumWidth(270);
+    updateResponsiveSizing();
+    grpModels->setMinimumWidth(UiPx(210));
+    grpModels->setMaximumWidth(UiPx(270));
     splitterContent->addWidget(grpModels);
     splitterContent->addWidget(m_workflowScroll);
     splitterContent->setStretchFactor(0, 0);
     splitterContent->setStretchFactor(1, 1);
-    splitterContent->setSizes({ 235, 1000 });
+    splitterContent->setSizes({ UiPx(235), UiPx(1000) });
 
     m_pLogConsole = new LogConsoleWidget(this);
 
@@ -1135,12 +1189,74 @@ MainWindow::MainWindow(QWidget* parent)
     workspaceLayout->setContentsMargins(0, 0, 0, 0);
     workspaceLayout->setSpacing(8);
     workspaceLayout->addWidget(grpTop);
-    workspaceLayout->addLayout(layoutBadges);
     workspaceLayout->addWidget(grpWorkflow);
     workspaceLayout->addWidget(splitterMain, 1);
 
     rootLayout->addWidget(grpNavigation);
     rootLayout->addWidget(mainWorkspace, 1);
+
+    // Floating click guidance. It overlays the window, so it does not alter
+    // the carefully balanced workflow layout.
+    m_guidanceCallout = new QFrame(this);
+    m_guidanceCallout->setObjectName(QStringLiteral("guidanceCallout"));
+    auto* guidanceLayout = new QHBoxLayout(m_guidanceCallout);
+    guidanceLayout->setContentsMargins(UiPx(12), UiPx(8), UiPx(8), UiPx(8));
+    guidanceLayout->setSpacing(UiPx(8));
+    m_guidanceCalloutText = new QLabel(m_guidanceCallout);
+    m_guidanceCalloutText->setWordWrap(true);
+    m_guidanceCalloutText->setFixedWidth(UiPx(220));
+    m_guidanceDismissButton = new QPushButton(QStringLiteral("知道了"), m_guidanceCallout);
+    m_guidanceDismissButton->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+    guidanceLayout->addWidget(m_guidanceCalloutText, 1);
+    guidanceLayout->addWidget(m_guidanceDismissButton, 0, Qt::AlignVCenter);
+    m_guidanceCallout->setStyleSheet(QStringLiteral(
+        "QFrame#guidanceCallout { background-color: #fff7d6; color: #1c1917;"
+        " border: 2px solid #fbbf24; border-radius: 7px; }"
+        "QFrame#guidanceCallout QLabel { background: transparent; color: #1c1917;"
+        " font-size: 8pt; font-weight: 600; }"
+        "QFrame#guidanceCallout QPushButton { background-color: #fbbf24; color: #1c1917;"
+        " border: 1px solid #d97706; border-radius: 4px; padding: 5px 9px;"
+        " font-size: 8pt; font-weight: bold; }"));
+    m_guidanceArrow = new QLabel(this);
+    m_guidanceArrow->setAlignment(Qt::AlignCenter);
+    m_guidanceArrow->setFixedSize(UiPx(24), UiPx(22));
+    m_guidanceArrow->setStyleSheet(QStringLiteral(
+        "QLabel { color: #fbbf24; background: transparent; border: none;"
+        " font-size: 18px; font-weight: bold; }"));
+    m_guidanceBorder = new QFrame(this);
+    m_guidanceBorder->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_guidanceBorder->setStyleSheet(QStringLiteral(
+        "QFrame { background: transparent; border: 3px solid #fbbf24;"
+        " border-radius: 7px; }"));
+    m_guidanceBlocker = new QWidget(this);
+    m_guidanceBlocker->setAttribute(Qt::WA_NoMousePropagation);
+    m_guidanceBlocker->setStyleSheet(QStringLiteral("background: transparent;"));
+    m_guidanceCallout->hide();
+    m_guidanceArrow->hide();
+    m_guidanceBorder->hide();
+    m_guidanceBlocker->hide();
+
+    connect(m_guidanceDismissButton, &QPushButton::clicked, this, [this]() {
+        advanceGuidanceTour();
+    });
+    const QList<QPushButton*> guidanceTargets = {
+        m_btnAddModel, m_btnBrowseModelPackage, m_btnCompileCurrent,
+        m_btnCompileAll, m_btnRunPrecheck
+    };
+    for (QPushButton* target : guidanceTargets) {
+        connect(target, &QPushButton::clicked, this, [this, target]() {
+            if (m_guidanceTipTarget == target) {
+                hideGuidanceTip(true);
+                stopGuidancePulse(target);
+                if (target == m_btnCompileCurrent || target == m_btnCompileAll) {
+                    m_guidanceTourRequested = false;
+                    m_compileNavigationGuidancePending = false;
+                }
+            }
+        });
+    }
+    connect(m_workflowScroll->verticalScrollBar(), &QScrollBar::valueChanged,
+            this, [this](int) { repositionGuidanceTip(); });
 
     // --- Connect Signals ---
     connect(m_btnRunPrecheck, &QPushButton::clicked, this, &MainWindow::runFullPrecheck);
@@ -1227,6 +1343,17 @@ MainWindow::MainWindow(QWidget* parent)
     setEditorsEnabled(false);
     updateWorkflowUi();
     applyDarkStyle();
+    for (QLabel* label : m_workflowSteps) label->installEventFilter(this);
+    m_listTestNavigation->installEventFilter(this);
+    for (QLabel* label : findChildren<QLabel*>()) {
+        if (label->property("navLegendText").toBool()) label->installEventFilter(this);
+    }
+    for (QPushButton* button : findChildren<QPushButton*>())
+        button->installEventFilter(this);
+    for (QTableWidget* table : findChildren<QTableWidget*>())
+        table->horizontalHeader()->installEventFilter(this);
+    qApp->installEventFilter(this);
+    scheduleAdaptiveFontUpdate();
     logMessage("INFO: 初始化完毕。请在左侧「型号与 UserMain」添加型号、配置包路径并编译，输出目录为 exe 旁 TestModel/<型号名>/。");
     QTimer::singleShot(0, this, &MainWindow::maybeRestoreLastSession);
 }
@@ -1248,6 +1375,173 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         logMessage(QStringLiteral("INFO: 已保存会话到 %1").arg(SessionStore::DefaultPath()));
     }
     QMainWindow::closeEvent(event);
+}
+
+void MainWindow::resizeEvent(QResizeEvent* event) {
+    QMainWindow::resizeEvent(event);
+    updateResponsiveSizing();
+    repositionGuidanceTip();
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (m_guidanceInputLocked && event) {
+        const QEvent::Type type = event->type();
+        const bool inputEvent = type == QEvent::MouseButtonPress
+            || type == QEvent::MouseButtonRelease
+            || type == QEvent::MouseButtonDblClick
+            || type == QEvent::Wheel
+            || type == QEvent::ContextMenu;
+        if (inputEvent) {
+            QWidget* widget = qobject_cast<QWidget*>(watched);
+            // A mouse event first passes through QApplication/QWindow objects.
+            // Only make a decision once Qt dispatches it to a concrete QWidget;
+            // otherwise even the allowed target and dismissal button get eaten.
+            if (!widget) return QMainWindow::eventFilter(watched, event);
+
+            const bool inTarget = m_guidanceTipTarget
+                && (widget == m_guidanceTipTarget
+                    || m_guidanceTipTarget->isAncestorOf(widget));
+            const bool inCallout = m_guidanceCallout
+                && (widget == m_guidanceCallout || m_guidanceCallout->isAncestorOf(widget));
+            const bool inTargetPopup = m_guidanceTipTarget == m_tblRandomVars
+                && (widget->window()->windowFlags() & Qt::Popup);
+            const bool inModalDialog = widget->window() != this
+                && qobject_cast<QDialog*>(widget->window())
+                && widget->window()->isModal();
+            if (!inTarget && !inCallout && !inTargetPopup && !inModalDialog) return true;
+            if (inTarget && type == QEvent::MouseButtonPress) {
+                stopGuidanceBorder();
+                m_guidanceBorderAcknowledged = true;
+            }
+        }
+    }
+    if (event && (event->type() == QEvent::Resize || event->type() == QEvent::Show))
+        scheduleAdaptiveFontUpdate();
+    if (event && watched == m_guidanceTipTarget
+        && (event->type() == QEvent::Resize || event->type() == QEvent::Move
+            || event->type() == QEvent::Show || event->type() == QEvent::Hide)) {
+        QTimer::singleShot(0, this, [this]() { repositionGuidanceTip(); });
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::scheduleAdaptiveFontUpdate() {
+    if (m_adaptiveFontUpdatePending) return;
+    m_adaptiveFontUpdatePending = true;
+    QTimer::singleShot(0, this, [this]() {
+        m_adaptiveFontUpdatePending = false;
+        updateAdaptiveFonts();
+    });
+}
+
+void MainWindow::updateResponsiveSizing() {
+    if (!m_grpNavigation || !m_listTestNavigation) return;
+
+    const QFontMetrics metrics = m_listTestNavigation->fontMetrics();
+    int widestText = 0;
+    for (int i = 0; i < m_listTestNavigation->count(); ++i) {
+        const QListWidgetItem* item = m_listTestNavigation->item(i);
+        if (item) widestText = qMax(widestText, metrics.horizontalAdvance(item->text()));
+    }
+
+    // Keep the reference-machine width unchanged, but do not let a different
+    // system font or a narrower desktop make navigation dominate the window.
+    const int desired = qMax(UiPx(205), widestText + UiPx(44));
+    const int proportionalCap = qRound(width() * 0.16);
+    const int cap = qMax(UiPx(168), qMin(UiPx(240), proportionalCap));
+    const int target = qMin(desired, cap);
+    if (m_grpNavigation->width() != target) {
+        m_grpNavigation->setFixedWidth(target);
+    }
+
+    scheduleAdaptiveFontUpdate();
+}
+
+void MainWindow::updateAdaptiveFonts() {
+    // Top workflow steps: preserve generous padding and fit one or two lines.
+    for (QLabel* label : m_workflowSteps) {
+        if (!label || label->width() <= 0 || label->height() <= 0) continue;
+        const QSize available(qMax(1, label->width() - UiPx(24)),
+                              qMax(1, label->height() - UiPx(18)));
+        const qreal pointSize = FittingPointSize(
+            label->text(), available, label->font(), 7.5, 5.5, true);
+        ApplyAdaptivePointSize(label, QStringLiteral("QLabel"), pointSize);
+    }
+
+    // Navigation items share one font so the list remains visually consistent.
+    if (m_listTestNavigation && m_listTestNavigation->viewport()) {
+        const int availableWidth = qMax(
+            1, m_listTestNavigation->viewport()->width() - UiPx(30));
+        const int availableHeight = qMax(1, UiPx(32) - UiPx(12));
+        qreal pointSize = 7.5;
+        for (int i = 0; i < m_listTestNavigation->count(); ++i) {
+            const QListWidgetItem* item = m_listTestNavigation->item(i);
+            if (!item) continue;
+            pointSize = qMin(pointSize, FittingPointSize(
+                item->text(), QSize(availableWidth, availableHeight),
+                m_listTestNavigation->font(), 7.5, 5.5, false));
+        }
+        ApplyAdaptivePointSize(m_listTestNavigation,
+                               QStringLiteral("QListWidget, QListWidget::item"), pointSize);
+        for (int i = 0; i < m_listTestNavigation->count(); ++i) {
+            QListWidgetItem* item = m_listTestNavigation->item(i);
+            if (!item) continue;
+            QFont font = item->font();
+            font.setPointSizeF(pointSize);
+            font.setBold(true);
+            item->setFont(font);
+        }
+    }
+
+    // Legend text follows the same compact sizing as navigation items.
+    const QList<QLabel*> labels = findChildren<QLabel*>();
+    for (QLabel* label : labels) {
+        if (!label || !label->property("navLegendText").toBool()) continue;
+        const QSize available(qMax(1, label->width() - UiPx(12)),
+                              qMax(1, label->height() - UiPx(4)));
+        const qreal pointSize = FittingPointSize(
+            label->text(), available, label->font(), 8.5, 7.0, false);
+        ApplyAdaptivePointSize(label, QStringLiteral("QLabel"), pointSize);
+    }
+
+    // Buttons use a small common maximum, shrinking only where necessary.
+    const QList<QPushButton*> buttons = findChildren<QPushButton*>();
+    for (QPushButton* button : buttons) {
+        if (!button || button->width() <= 0 || button->height() <= 0) continue;
+        const QSize available(qMax(1, button->width() - UiPx(28)),
+                              qMax(1, button->height() - UiPx(16)));
+        const qreal pointSize = FittingPointSize(
+            button->text(), available, button->font(), 8.0, 5.5,
+            button->text().contains(QLatin1Char('\n')));
+        ApplyAdaptivePointSize(button, QStringLiteral("QPushButton"), pointSize);
+    }
+
+    // One fitted font per table header keeps every column label readable.
+    const QList<QTableWidget*> tables = findChildren<QTableWidget*>();
+    for (QTableWidget* table : tables) {
+        QHeaderView* header = table ? table->horizontalHeader() : nullptr;
+        if (!header || !header->isVisible() || header->count() == 0) continue;
+        QFont maximumFont = header->font();
+        maximumFont.setPointSizeF(8.0);
+        const int requiredHeaderHeight = QFontMetrics(maximumFont).height() + 16;
+        if (header->minimumHeight() == header->maximumHeight()) {
+            header->setFixedHeight(qMax(header->height(), requiredHeaderHeight));
+        } else {
+            header->setMinimumHeight(requiredHeaderHeight);
+        }
+        qreal pointSize = 8.0;
+        for (int section = 0; section < header->count(); ++section) {
+            if (header->isSectionHidden(section)) continue;
+            const QString text = table->model()->headerData(
+                section, Qt::Horizontal, Qt::DisplayRole).toString();
+            const QSize available(qMax(1, header->sectionSize(section) - UiPx(18)),
+                                  qMax(1, header->height() - UiPx(14)));
+            pointSize = qMin(pointSize, FittingPointSize(
+                text, available, header->font(), 8.0, 5.0, false));
+        }
+        ApplyAdaptivePointSize(header, QStringLiteral("QHeaderView::section"), pointSize);
+        header->setTextElideMode(Qt::ElideNone);
+    }
 }
 
 SessionSnapshot MainWindow::collectSessionSnapshot() const {
@@ -1288,6 +1582,9 @@ SessionSnapshot MainWindow::collectSessionSnapshot() const {
 
 void MainWindow::applySessionSnapshot(const SessionSnapshot& snapshot) {
     m_models.clear();
+    m_hasAddedFirstModel = !snapshot.models.empty();
+    m_guidanceTourRequested = false;
+    m_compileNavigationGuidancePending = false;
     m_currentModelIndex = -1;
     m_latestFleetReport = FleetSessionReport();
     m_latestReport = CombinedPrecheckReport();
@@ -1371,8 +1668,20 @@ void MainWindow::applySessionSnapshot(const SessionSnapshot& snapshot) {
     if (m_spnThreadCount)
         m_spnThreadCount->setValue(qBound(1, snapshot.threadCount, 64));
 
-    if (!snapshot.windowGeometry.isEmpty())
+    if (!snapshot.windowGeometry.isEmpty()) {
         restoreGeometry(snapshot.windowGeometry);
+        const QRect available = QApplication::primaryScreen()
+            ? QApplication::primaryScreen()->availableGeometry()
+            : QRect(0, 0, UiPx(1440), UiPx(900));
+        QRect restored = geometry();
+        restored.setWidth(qMin(restored.width(), available.width()));
+        restored.setHeight(qMin(restored.height(), available.height()));
+        if (restored.left() < available.left()) restored.moveLeft(available.left());
+        if (restored.top() < available.top()) restored.moveTop(available.top());
+        if (restored.right() > available.right()) restored.moveRight(available.right());
+        if (restored.bottom() > available.bottom()) restored.moveBottom(available.bottom());
+        setGeometry(restored);
+    }
 
     refreshModelListUi();
     refreshFleetCountTable();
@@ -1401,23 +1710,37 @@ void MainWindow::applySessionSnapshot(const SessionSnapshot& snapshot) {
 }
 
 void MainWindow::maybeRestoreLastSession() {
-    if (!SessionStore::Exists()) return;
+    auto finishRestoreCheck = [this]() {
+        m_sessionRestoreChecked = true;
+        updateWorkflowUi();
+    };
+
+    if (!SessionStore::Exists()) {
+        finishRestoreCheck();
+        return;
+    }
     SessionSnapshot snapshot;
     QString err;
     if (!SessionStore::Load(snapshot, &err)) {
         logMessage(QStringLiteral("WARN: 读取上次会话失败 — %1").arg(err));
+        finishRestoreCheck();
         return;
     }
-    if (snapshot.models.empty()) return;
+    if (snapshot.models.empty()) {
+        finishRestoreCheck();
+        return;
+    }
 
     SessionRestoreDialog dialog(snapshot, this);
     if (dialog.exec() != QDialog::Accepted || !dialog.shouldRestore()) {
         logMessage(QStringLiteral("INFO: 已跳过还原上次会话"));
+        finishRestoreCheck();
         return;
     }
     applySessionSnapshot(snapshot);
     logMessage(QStringLiteral("INFO: 已还原上次会话（%1 个型号）")
         .arg(snapshot.models.size()));
+    finishRestoreCheck();
 }
 
 void MainWindow::applyDarkStyle() {
@@ -1535,7 +1858,7 @@ void MainWindow::FillRandomVarTable(QTableWidget* table, const std::vector<Rando
         table->setItem(row, 0, en);
         table->setItem(row, 1, new QTableWidgetItem(qUtf8(v.name)));
         QComboBox* ty = new QComboBox(table);
-        ty->setFixedHeight(24);
+        ty->setFixedHeight(UiPx(24));
         ty->addItem("double", 0);
         ty->addItem("int", 1);
         ty->setCurrentIndex(v.type == RandomVarType::Int ? 1 : 0);
@@ -1662,6 +1985,281 @@ void MainWindow::setHarnessStatusText(const QString& text, const QString& tone) 
             .arg(color));
 }
 
+void MainWindow::stopGuidancePulse(QPushButton* button) {
+    if (button && button != m_guidancePulseButton) return;
+    if (!button || m_guidanceTipTarget == button) hideGuidanceTip(false);
+    if (m_guidancePulseAnimation) {
+        m_guidancePulseAnimation->stop();
+        delete m_guidancePulseAnimation;
+        m_guidancePulseAnimation = nullptr;
+    }
+    if (m_guidancePulseButton && m_guidancePulseEffect)
+        m_guidancePulseButton->setGraphicsEffect(nullptr);
+    m_guidancePulseEffect = nullptr;
+    m_guidancePulseButton = nullptr;
+    m_guidancePulseFast = false;
+}
+
+void MainWindow::pulseGuidanceButton(QPushButton* button, bool fast) {
+    if (!button) return;
+    if (m_guidancePulseButton == button
+        && m_guidancePulseFast == fast
+        && m_guidancePulseAnimation
+        && m_guidancePulseAnimation->state() == QAbstractAnimation::Running) {
+        showGuidanceTip(button, false);
+        return;
+    }
+
+    stopGuidancePulse();
+    m_guidancePulseButton = button;
+    m_guidancePulseFast = fast;
+    m_guidancePulseEffect = new QGraphicsColorizeEffect(button);
+    m_guidancePulseEffect->setColor(QColor(QStringLiteral("#fbbf24")));
+    m_guidancePulseEffect->setStrength(0.0);
+    button->setGraphicsEffect(m_guidancePulseEffect);
+
+    m_guidancePulseAnimation = new QPropertyAnimation(
+        m_guidancePulseEffect, "strength", this);
+    m_guidancePulseAnimation->setDuration(fast ? 600 : 1800);
+    m_guidancePulseAnimation->setLoopCount(-1);
+    m_guidancePulseAnimation->setEasingCurve(QEasingCurve::InOutSine);
+    m_guidancePulseAnimation->setKeyValueAt(0.0, 0.0);
+    m_guidancePulseAnimation->setKeyValueAt(0.5, fast ? 0.95 : 0.72);
+    m_guidancePulseAnimation->setKeyValueAt(1.0, 0.0);
+    m_guidancePulseAnimation->start();
+    showGuidanceTip(button, false);
+}
+
+void MainWindow::showGuidanceTip(QWidget* target, bool force, const QString& customText) {
+    if (!target || !m_guidanceCallout || !m_guidanceCalloutText || !m_guidanceArrow)
+        return;
+    if (force && m_dismissedGuidanceTarget == target)
+        m_dismissedGuidanceTarget = nullptr;
+    if (!force && m_dismissedGuidanceTarget == target) return;
+
+    QString text = customText;
+    if (!text.isEmpty()) {
+        // Caller supplied the step-specific explanation.
+    } else if (target == m_btnAddModel) {
+        text = QStringLiteral("从这里开始：点击“添加型号”。");
+    } else if (target == m_btnBrowseModelPackage) {
+        text = QStringLiteral("下一步：点击“浏览…”选择模型包路径。");
+    } else if (target == m_btnCompileCurrent) {
+        text = QStringLiteral("模型包已就绪：点击“编译当前型号”。");
+    } else if (target == m_btnRunPrecheck) {
+        text = QStringLiteral("全部型号已编译：点击“一键预检”生成完整结果。");
+    } else {
+        text = QStringLiteral("请点击箭头所指的按钮继续。");
+    }
+
+    m_guidanceTipTarget = target;
+    target->installEventFilter(this);
+    scrollGuidanceTargetIntoView();
+    m_guidanceCalloutText->setText(text);
+    m_guidanceDismissButton->setText(QStringLiteral("知道了"));
+    m_guidanceCallout->adjustSize();
+    m_guidanceBlocker->setGeometry(rect());
+    m_guidanceBlocker->show();
+    m_guidanceBlocker->raise();
+    m_guidanceCallout->show();
+    m_guidanceArrow->show();
+    m_guidanceCallout->raise();
+    m_guidanceArrow->raise();
+    m_guidanceInputLocked = true;
+    startGuidanceBorder(target, false);
+    repositionGuidanceTip();
+    QTimer::singleShot(0, this, [this]() {
+        scrollGuidanceTargetIntoView();
+        repositionGuidanceTip();
+    });
+    QTimer::singleShot(80, this, [this]() {
+        scrollGuidanceTargetIntoView();
+        repositionGuidanceTip();
+    });
+}
+
+void MainWindow::hideGuidanceTip(bool rememberDismissal) {
+    if (rememberDismissal && m_guidanceTipTarget)
+        m_dismissedGuidanceTarget = m_guidanceTipTarget;
+    stopGuidanceBorder();
+    m_guidanceInputLocked = false;
+    m_guidanceTipTarget = nullptr;
+    if (m_guidanceCallout) m_guidanceCallout->hide();
+    if (m_guidanceArrow) m_guidanceArrow->hide();
+    if (m_guidanceBlocker) m_guidanceBlocker->hide();
+}
+
+void MainWindow::scrollGuidanceTargetIntoView() {
+    if (!m_guidanceTipTarget || !m_workflowScroll || !m_workflowScroll->widget()) return;
+    if (m_guidanceTipTarget == m_btnRunPrecheck || m_guidanceTipTarget == m_btnAddModel)
+        return;
+
+    QWidget* page = m_workflowScroll->widget();
+    QWidget* ancestor = m_guidanceTipTarget;
+    bool belongsToPage = false;
+    while (ancestor) {
+        if (ancestor == page) {
+            belongsToPage = true;
+            break;
+        }
+        ancestor = ancestor->parentWidget();
+    }
+    if (!belongsToPage) return;
+
+    if (page->layout()) page->layout()->activate();
+    const QPoint targetOnPage = m_guidanceTipTarget->mapTo(page, QPoint(0, 0));
+    const int viewportHeight = m_workflowScroll->viewport()->height();
+    const int targetHeight = qMin(m_guidanceTipTarget->height(), viewportHeight);
+    const int centeredValue = targetOnPage.y()
+        - qMax(0, (viewportHeight - targetHeight) / 2);
+    QScrollBar* bar = m_workflowScroll->verticalScrollBar();
+    bar->setValue(qBound(bar->minimum(), centeredValue, bar->maximum()));
+}
+
+void MainWindow::startGuidanceBorder(QWidget* target, bool fast) {
+    if (!target || !m_guidanceBorder) return;
+    stopGuidanceBorder();
+    m_guidanceBorderAcknowledged = false;
+    m_guidanceBorderEffect = new QGraphicsOpacityEffect(m_guidanceBorder);
+    m_guidanceBorder->setGraphicsEffect(m_guidanceBorderEffect);
+    m_guidanceBorderEffect->setOpacity(0.35);
+    m_guidanceBorderAnimation = new QPropertyAnimation(
+        m_guidanceBorderEffect, "opacity", this);
+    m_guidanceBorderAnimation->setDuration(fast ? 500 : 1100);
+    m_guidanceBorderAnimation->setLoopCount(-1);
+    m_guidanceBorderAnimation->setEasingCurve(QEasingCurve::InOutSine);
+    m_guidanceBorderAnimation->setKeyValueAt(0.0, 0.28);
+    m_guidanceBorderAnimation->setKeyValueAt(0.5, 1.0);
+    m_guidanceBorderAnimation->setKeyValueAt(1.0, 0.28);
+    m_guidanceBorderAnimation->start();
+    m_guidanceBorder->show();
+    m_guidanceBorder->raise();
+}
+
+void MainWindow::stopGuidanceBorder() {
+    if (m_guidanceBorderAnimation) {
+        m_guidanceBorderAnimation->stop();
+        delete m_guidanceBorderAnimation;
+        m_guidanceBorderAnimation = nullptr;
+    }
+    if (m_guidanceBorder && !m_guidanceBorderAcknowledged) {
+        m_guidanceBorder->setGraphicsEffect(nullptr);
+        m_guidanceBorder->hide();
+    }
+    m_guidanceBorderEffect = nullptr;
+}
+
+void MainWindow::advanceGuidanceTour() {
+    QWidget* completedTarget = m_guidanceTipTarget;
+    hideGuidanceTip(true);
+    if (QPushButton* button = qobject_cast<QPushButton*>(completedTarget))
+        stopGuidancePulse(button);
+    if (completedTarget == m_tblRandomVars) {
+        showGuidanceTip(
+            m_editUserMain, true,
+            QStringLiteral("在这里编写 UserMain 函数体。随机变量可通过 R.变量名 使用。"));
+    } else if (completedTarget == m_editUserMain) {
+        showGuidanceTip(
+            m_btnCompileCurrent, true,
+            QStringLiteral("代码编写完成后，点击“编译当前型号”。"));
+    } else if (completedTarget == m_btnCompileCurrent) {
+        m_guidanceTourRequested = false;
+    } else if (completedTarget == m_btnCompileAll) {
+        m_compileNavigationGuidancePending = false;
+    }
+}
+
+void MainWindow::repositionGuidanceTip() {
+    if (!m_guidanceTipTarget || !m_guidanceCallout || !m_guidanceArrow) {
+        return;
+    }
+    if (!m_guidanceTipTarget->isVisibleTo(this)
+        || m_guidanceTipTarget->visibleRegion().isEmpty()) {
+        m_guidanceCallout->hide();
+        m_guidanceArrow->hide();
+        if (m_guidanceBorder) m_guidanceBorder->hide();
+        if (m_guidanceBlocker) m_guidanceBlocker->hide();
+        return;
+    }
+
+    m_guidanceCallout->show();
+    m_guidanceArrow->show();
+    m_guidanceCallout->adjustSize();
+    const QPoint targetTopLeft = m_guidanceTipTarget->mapTo(this, QPoint(0, 0));
+    const QRect targetRect(targetTopLeft, m_guidanceTipTarget->size());
+    if (m_guidanceBorder) {
+        m_guidanceBorder->setGeometry(targetRect.adjusted(-UiPx(4), -UiPx(4),
+                                                          UiPx(4), UiPx(4)));
+        m_guidanceBorder->show();
+        m_guidanceBorder->raise();
+    }
+    const int margin = UiPx(8);
+    const int arrowHeight = m_guidanceArrow->height();
+    const bool placeAbove = targetRect.top()
+        >= m_guidanceCallout->height() + arrowHeight + margin;
+
+    int calloutX = targetRect.center().x() - m_guidanceCallout->width() / 2;
+    calloutX = qBound(margin, calloutX,
+        qMax(margin, width() - m_guidanceCallout->width() - margin));
+    int calloutY = placeAbove
+        ? targetRect.top() - m_guidanceCallout->height() - arrowHeight
+        : targetRect.bottom() + arrowHeight;
+    calloutY = qBound(margin, calloutY,
+        qMax(margin, height() - m_guidanceCallout->height() - margin));
+    m_guidanceCallout->move(calloutX, calloutY);
+
+    if (m_guidanceBlocker) {
+        m_guidanceBlocker->setGeometry(rect());
+        QRegion blockedRegion(m_guidanceBlocker->rect());
+        const QRect targetHole = targetRect.adjusted(-UiPx(5), -UiPx(5),
+                                                      UiPx(5), UiPx(5));
+        const QRect calloutHole = m_guidanceCallout->geometry().adjusted(
+            -UiPx(3), -UiPx(3), UiPx(3), UiPx(3));
+        blockedRegion -= QRegion(targetHole);
+        blockedRegion -= QRegion(calloutHole);
+        m_guidanceBlocker->setMask(blockedRegion);
+        m_guidanceBlocker->show();
+        m_guidanceBlocker->raise();
+    }
+
+    m_guidanceArrow->setText(placeAbove ? QStringLiteral("▼") : QStringLiteral("▲"));
+    const int arrowX = qBound(margin,
+        targetRect.center().x() - m_guidanceArrow->width() / 2,
+        qMax(margin, width() - m_guidanceArrow->width() - margin));
+    const int arrowY = placeAbove
+        ? m_guidanceCallout->geometry().bottom()
+        : targetRect.bottom();
+    m_guidanceArrow->move(arrowX, arrowY);
+    m_guidanceCallout->raise();
+    m_guidanceArrow->raise();
+}
+
+void MainWindow::updateGuidancePulse() {
+    if (!m_sessionRestoreChecked) {
+        stopGuidancePulse();
+        return;
+    }
+    if (m_models.empty() && !m_hasAddedFirstModel) {
+        pulseGuidanceButton(m_btnAddModel, false);
+        return;
+    }
+
+    const bool everyCompiled = allModelsCompiled();
+    const bool hasCompletePrecheck = !m_latestFleetReport.modelReports.empty()
+        && m_latestFleetReport.modelReports.size() == m_models.size();
+    if (everyCompiled && !hasCompletePrecheck) {
+        pulseGuidanceButton(m_btnRunPrecheck, false);
+        return;
+    }
+
+    if (m_guidancePulseButton == m_btnAddModel
+        || m_guidancePulseButton == m_btnBrowseModelPackage
+        || m_guidancePulseButton == m_btnRunPrecheck
+        || m_guidancePulseButton == m_btnCompileCurrent) {
+        stopGuidancePulse();
+    }
+}
+
 void MainWindow::updateWorkflowUi() {
     const bool hasSelection = m_currentModelIndex >= 0
         && m_currentModelIndex < static_cast<int>(m_models.size());
@@ -1702,7 +2300,7 @@ void MainWindow::updateWorkflowUi() {
     if (m_modelSetupPanel) {
         // Compact while waiting for package path; expand once UserMain editor shows.
         if (pathValid) {
-            m_modelSetupPanel->setMinimumHeight(780);
+            m_modelSetupPanel->setMinimumHeight(UiPx(780));
             m_modelSetupPanel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
         } else {
             m_modelSetupPanel->setMinimumHeight(0);
@@ -1852,11 +2450,12 @@ void MainWindow::updateWorkflowUi() {
         m_lblPePageHint->show();
     } else if (m_latestFleetReport.modelReports.empty()) {
         m_lblPePageHint->setText(
-            QStringLiteral("已自动列出型号包中的 DLL。点击顶部“一键预检全部型号”后可查看文件结构与依赖检查结果。"));
+            QStringLiteral("已自动列出型号包中的 DLL。点击顶部“一键预检”后可查看文件结构与依赖检查结果。"));
         m_lblPePageHint->show();
     } else {
         m_lblPePageHint->hide();
     }
+    updateGuidancePulse();
 }
 
 void MainWindow::saveEditorsToCurrentModel() {
@@ -2270,6 +2869,75 @@ void MainWindow::onTestNavigationChanged(int row) {
         return;
     }
 
+    const bool requiresModel = row >= 0;
+    if (requiresModel && m_models.empty()) {
+        m_guidanceTourRequested = true;
+        m_compileNavigationGuidancePending = row >= 4 && row <= 8;
+        {
+            QSignalBlocker blocker(m_listTestNavigation);
+            m_listTestNavigation->setCurrentRow(-1);
+        }
+        updateWorkflowUi();
+        pulseGuidanceButton(m_btnAddModel, true);
+        showGuidanceTip(m_btnAddModel, true);
+        return;
+    }
+
+    const bool requiresMultiObjectPackage = row == 9;
+    if (requiresMultiObjectPackage) {
+        if (m_currentModelIndex < 0 && !m_models.empty())
+            m_listModels->setCurrentRow(0);
+        const bool validIndex = m_currentModelIndex >= 0
+            && m_currentModelIndex < static_cast<int>(m_models.size());
+        const bool pathReady = validIndex
+            && isModelPathValid(m_models[static_cast<size_t>(m_currentModelIndex)]);
+        if (!pathReady) {
+            m_guidanceTourRequested = true;
+            {
+                QSignalBlocker blocker(m_listTestNavigation);
+                m_listTestNavigation->setCurrentRow(-1);
+            }
+            updateWorkflowUi();
+            m_workflowScroll->ensureWidgetVisible(
+                m_btnBrowseModelPackage, 0, UiPx(16));
+            pulseGuidanceButton(m_btnBrowseModelPackage, true);
+            showGuidanceTip(m_btnBrowseModelPackage, true);
+            return;
+        }
+    }
+
+    const bool requiresCompiledModel = row >= 4 && row <= 8;
+    const bool anyCompiled = std::any_of(m_models.begin(), m_models.end(),
+        [this](const FleetModelEntry& entry) { return isModelCompiled(entry); });
+    if (requiresCompiledModel && !anyCompiled) {
+        m_guidanceTourRequested = false;
+        {
+            QSignalBlocker blocker(m_listTestNavigation);
+            m_listTestNavigation->setCurrentRow(-1);
+        }
+        if (m_currentModelIndex < 0 && !m_models.empty())
+            m_listModels->setCurrentRow(0);
+        updateWorkflowUi();
+        const bool validIndex = m_currentModelIndex >= 0
+            && m_currentModelIndex < static_cast<int>(m_models.size());
+        const bool pathReady = validIndex
+            && isModelPathValid(m_models[static_cast<size_t>(m_currentModelIndex)]);
+        if (!pathReady) {
+            m_compileNavigationGuidancePending = true;
+            m_workflowScroll->ensureWidgetVisible(m_btnBrowseModelPackage, 0, UiPx(16));
+            pulseGuidanceButton(m_btnBrowseModelPackage, true);
+            showGuidanceTip(m_btnBrowseModelPackage, true);
+        } else {
+            m_compileNavigationGuidancePending = false;
+            m_workflowScroll->ensureWidgetVisible(m_btnCompileAll, 0, UiPx(16));
+            pulseGuidanceButton(m_btnCompileAll, false);
+            showGuidanceTip(
+                m_btnCompileAll, true,
+                QStringLiteral("编译成功后才可测试。"));
+        }
+        return;
+    }
+
     // Re-apply status text colors (selected row forced white).
     refreshNavigationStatus();
 
@@ -2334,6 +3002,9 @@ void MainWindow::onTestNavigationChanged(int row) {
 void MainWindow::addModel() {
     saveEditorsToCurrentModel();
     m_latestFleetReport = FleetSessionReport();
+    if (m_dismissedGuidanceTarget == m_btnRunPrecheck)
+        m_dismissedGuidanceTarget = nullptr;
+    const bool firstModel = m_models.empty() && !m_hasAddedFirstModel;
 
     FleetModelEntry entry;
     entry.name = QStringLiteral("model%1").arg(m_models.size() + 1);
@@ -2348,6 +3019,13 @@ void MainWindow::addModel() {
     refreshModelListUi();
     m_listModels->setCurrentRow(static_cast<int>(m_models.size()) - 1);
     logMessage(QString("INFO: 已添加型号「%1」（请浏览并设置模型包路径）").arg(entry.name));
+    if (firstModel || m_guidanceTourRequested) {
+        m_hasAddedFirstModel = true;
+        m_guidanceTourRequested = true;
+        pulseGuidanceButton(m_btnBrowseModelPackage, false);
+    } else {
+        m_hasAddedFirstModel = true;
+    }
 }
 
 void MainWindow::removeModel() {
@@ -2419,6 +3097,21 @@ void MainWindow::browseCurrentModelPackage() {
     refreshCurrentModelHeaders();
     refreshModelListUi();
     updateWorkflowUi();
+    if (m_compileNavigationGuidancePending && isModelPathValid(entry)) {
+        m_compileNavigationGuidancePending = false;
+        m_guidanceTourRequested = false;
+        stopGuidancePulse(m_btnBrowseModelPackage);
+        pulseGuidanceButton(m_btnCompileAll, false);
+        showGuidanceTip(
+            m_btnCompileAll, true,
+            QStringLiteral("编译成功后才可测试。"));
+    } else if (m_guidanceTourRequested && isModelPathValid(entry)) {
+        stopGuidancePulse(m_btnBrowseModelPackage);
+        showGuidanceTip(
+            m_tblRandomVars, true,
+            QStringLiteral("配置随机变量：变量可在代码中通过 R.变量名 使用；"
+                           "每次运行的值为最小值与最大值之间的随机值。"));
+    }
 }
 
 void MainWindow::refreshCurrentModelHeaders() {
@@ -3746,7 +4439,7 @@ void MainWindow::addRandomVarRow() {
     m_tblRandomVars->setItem(row, 0, en);
     m_tblRandomVars->setItem(row, 1, new QTableWidgetItem("var"));
     QComboBox* ty = new QComboBox(m_tblRandomVars);
-    ty->setFixedHeight(24);
+    ty->setFixedHeight(UiPx(24));
     ty->addItem("double", 0);
     ty->addItem("int", 1);
     m_tblRandomVars->setCellWidget(row, 2, ty);
@@ -4643,7 +5336,6 @@ void MainWindow::runFullPrecheck() {
         }
     }
 
-    updateStatusBadges();
     refreshPeSelectors();
     refreshReportBrowser();
     updateWorkflowUi();
@@ -4925,7 +5617,6 @@ void MainWindow::onPerfProfileFinished(const PerfProfileReport& report) {
                                   m_latestReport.loadReport.isLoaded &&
                                   m_latestReport.perfReport.realtimeVerdict != "FAIL");
 
-    updateStatusBadges();
     refreshReportBrowser();
     updateWorkflowUi();
 
@@ -4997,7 +5688,6 @@ void MainWindow::onConcurrencyFinished(const ConcurrencyTestReport& report) {
         }
     }
 
-    updateStatusBadges();
     refreshReportBrowser();
     updateWorkflowUi();
 
@@ -5130,115 +5820,6 @@ void MainWindow::updateResultTable(QTableWidget* table, const ConcurrencyTestRep
         table->setItem(row, 2, new QTableWidgetItem(QString::number(tr.userReturnCode)));
         table->setItem(row, 3, new QTableWidgetItem(tr.exceptionOccurred ? "YES" : "NO"));
         table->setItem(row, 4, new QTableWidgetItem(qDecodeLog(tr.errorLog)));
-    }
-}
-
-void MainWindow::updateStatusBadges() {
-    auto setBadge = [](QLabel* lbl, const QString& prefix, const QString& status,
-                       const QString& bgColor, const QString& fgColor, const QString& borderColor) {
-        lbl->setText(prefix + ": " + status);
-        lbl->setStyleSheet(QString(
-            "QLabel { padding: 4px 12px; border-radius: 12px; font-weight: bold; font-size: 12px; "
-            "background-color: %1; color: %2; border: 1px solid %3; }")
-            .arg(bgColor, fgColor, borderColor));
-    };
-
-    int passedH = 0, totalH = 0;
-    int passedL = 0, totalL = 0;
-    int passedD = 0, totalD = 0;
-    bool headerConflictsPass = true;
-
-    if (!m_latestFleetReport.modelReports.empty()) {
-        headerConflictsPass = m_latestFleetReport.crossModelHeaderConflictReport.overallPass;
-        for (const auto& mr : m_latestFleetReport.modelReports) {
-            passedH += mr.passedHeaderCount;
-            totalH += static_cast<int>(mr.headerReports.size());
-            passedL += mr.passedLibCount;
-            totalL += static_cast<int>(mr.libReports.size());
-            passedD += mr.passedDllCount;
-            totalD += static_cast<int>(mr.dllReports.size());
-        }
-    } else {
-        headerConflictsPass = m_latestDualReport.headerConflictReport.overallPass;
-        passedH = m_latestDualReport.passedHeaderCount;
-        totalH = static_cast<int>(m_latestDualReport.headerReports.size());
-        passedL = m_latestDualReport.passedLibCount;
-        totalL = static_cast<int>(m_latestDualReport.libReports.size());
-        passedD = m_latestDualReport.passedDllCount;
-        totalD = static_cast<int>(m_latestDualReport.dllReports.size());
-    }
-
-    if (totalH > 0) {
-        const bool headerPass = passedH == totalH && headerConflictsPass;
-        QString statusStr = QString("%1 (%2/%3)").arg(headerPass ? "PASS" : "FAIL").arg(passedH).arg(totalH);
-        if (headerPass) {
-            setBadge(m_lblHeaderStatus, "头文件预检", statusStr, "#dcfce7", "#166534", "#86efac");
-        } else {
-            setBadge(m_lblHeaderStatus, "头文件预检", statusStr, "#fee2e2", "#991b1b", "#fca5a5");
-        }
-    } else {
-        setBadge(m_lblHeaderStatus, "头文件预检", "N/A", "#e5eef7", "#003986", "#b0c4de");
-    }
-
-    if (totalL > 0) {
-        QString statusStr = QString("%1 (%2/%3)").arg(passedL == totalL ? "PASS" : "FAIL").arg(passedL).arg(totalL);
-        if (passedL == totalL) {
-            setBadge(m_lblLibStatus, "LIB 库预检", statusStr, "#dcfce7", "#166534", "#86efac");
-        } else {
-            setBadge(m_lblLibStatus, "LIB 库预检", statusStr, "#fee2e2", "#991b1b", "#fca5a5");
-        }
-    } else {
-        setBadge(m_lblLibStatus, "LIB 库预检", "N/A", "#e5eef7", "#003986", "#b0c4de");
-    }
-
-    if (totalD > 0) {
-        QString statusStr = QString("%1 (%2/%3)").arg(passedD == totalD ? "PASS" : "FAIL").arg(passedD).arg(totalD);
-        if (passedD == totalD) {
-            setBadge(m_lblDllStatus, "DLL 动态库预检", statusStr, "#dcfce7", "#166534", "#86efac");
-        } else {
-            setBadge(m_lblDllStatus, "DLL 动态库预检", statusStr, "#fee2e2", "#991b1b", "#fca5a5");
-        }
-    } else {
-        setBadge(m_lblDllStatus, "DLL 动态库预检", "N/A", "#e5eef7", "#003986", "#b0c4de");
-    }
-
-    // Release / Debug 构建产物徽章
-    if (!m_latestFleetReport.modelReports.empty()) {
-        bool anyRelOk = false;
-        bool allDebugOk = true;
-        bool anyModel = false;
-        for (const auto& mr : m_latestFleetReport.modelReports) {
-            anyModel = true;
-            if (mr.releaseBuildOk) anyRelOk = true;
-            if (!mr.debugBuildOk) allDebugOk = false;
-        }
-        if (!anyModel) {
-            setBadge(m_lblBuildConfigStatus, "Release/Debug", "N/A",
-                     "#e5eef7", "#003986", "#b0c4de");
-        } else if (anyRelOk && allDebugOk) {
-            setBadge(m_lblBuildConfigStatus, "Release/Debug", "均可编译",
-                     "#dcfce7", "#166534", "#86efac");
-        } else if (anyRelOk) {
-            setBadge(m_lblBuildConfigStatus, "Release/Debug", "仅Release；无法编Debug",
-                     "#fef3c7", "#92400e", "#fcd34d");
-        } else {
-            setBadge(m_lblBuildConfigStatus, "Release/Debug", "Release缺失",
-                     "#fee2e2", "#991b1b", "#fca5a5");
-        }
-    } else if (!m_latestDualReport.packageDir.empty()) {
-        if (m_latestDualReport.releaseBuildOk && m_latestDualReport.debugBuildOk) {
-            setBadge(m_lblBuildConfigStatus, "Release/Debug", "均可编译",
-                     "#dcfce7", "#166534", "#86efac");
-        } else if (m_latestDualReport.releaseBuildOk) {
-            setBadge(m_lblBuildConfigStatus, "Release/Debug", "仅Release；无法编Debug",
-                     "#fef3c7", "#92400e", "#fcd34d");
-        } else {
-            setBadge(m_lblBuildConfigStatus, "Release/Debug", "N/A",
-                     "#e5eef7", "#003986", "#b0c4de");
-        }
-    } else {
-        setBadge(m_lblBuildConfigStatus, "Release/Debug", "N/A",
-                 "#e5eef7", "#003986", "#b0c4de");
     }
 }
 

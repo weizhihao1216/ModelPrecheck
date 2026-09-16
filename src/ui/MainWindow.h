@@ -43,6 +43,11 @@ class BusyOverlayWidget;
 class QScrollArea;
 class QFrame;
 class QVBoxLayout;
+class QPropertyAnimation;
+class QGraphicsColorizeEffect;
+class QGraphicsOpacityEffect;
+class QGroupBox;
+class QResizeEvent;
 
 struct PageResultWidgets {
     QFrame* frame = nullptr;
@@ -85,6 +90,8 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 public:
     void showBusyOverlay(const QString& text);
@@ -138,7 +145,6 @@ private slots:
 
 private:
     void applyDarkStyle();
-    void updateStatusBadges();
     void updateTestItemSummaryView(const PrecheckSummaryBoard& board);
     void showPrecheckSummaryDialog(const PrecheckSummaryBoard& board);
     void applyPageResult(PageResultWidgets& widgets, const TestItemResult* item);
@@ -184,6 +190,20 @@ private:
     void startConcurrencyWorker(UserCodeHarness* harness, const ConcurrencyTestConfig& cfg,
                                 const QString& busyText = QString());
     void refreshCodeEditorCompletions();
+    void pulseGuidanceButton(QPushButton* button, bool fast);
+    void stopGuidancePulse(QPushButton* button = nullptr);
+    void updateGuidancePulse();
+    void showGuidanceTip(QWidget* target, bool force = false,
+                         const QString& customText = QString());
+    void hideGuidanceTip(bool rememberDismissal = false);
+    void repositionGuidanceTip();
+    void scrollGuidanceTargetIntoView();
+    void startGuidanceBorder(QWidget* target, bool fast = false);
+    void stopGuidanceBorder();
+    void advanceGuidanceTour();
+    void updateResponsiveSizing();
+    void updateAdaptiveFonts();
+    void scheduleAdaptiveFontUpdate();
     const CombinedPrecheckReport* selectedPeDllReport() const;
     UserHarnessConfig buildHarnessConfig(const FleetModelEntry& entry, int index) const;
     UserHarnessConfig buildUserMultiObjectConfig(const FleetModelEntry& entry, int index) const;
@@ -210,14 +230,11 @@ private:
 
     QPushButton* m_btnRunPrecheck;
     QPushButton* m_btnExportReport;
-    QLabel* m_lblHeaderStatus;
-    QLabel* m_lblLibStatus;
-    QLabel* m_lblDllStatus;
-    QLabel* m_lblBuildConfigStatus;
     QLabel* m_lblWorkflowSummary;
     std::vector<QLabel*> m_workflowSteps;
     QTabWidget* m_pCentralTabs;
     QListWidget* m_listTestNavigation;
+    QGroupBox* m_grpNavigation = nullptr;
     QLabel* m_lblNavLegend = nullptr;
     QScrollArea* m_workflowScroll;
 
@@ -372,6 +389,28 @@ private:
     int m_currentModelIndex = -1;
     bool m_blockModelUi = false;
     bool m_showSingleItemReport = false;
+
+    QPushButton* m_guidancePulseButton = nullptr;
+    QGraphicsColorizeEffect* m_guidancePulseEffect = nullptr;
+    QPropertyAnimation* m_guidancePulseAnimation = nullptr;
+    bool m_guidancePulseFast = false;
+    QFrame* m_guidanceCallout = nullptr;
+    QLabel* m_guidanceCalloutText = nullptr;
+    QLabel* m_guidanceArrow = nullptr;
+    QPushButton* m_guidanceDismissButton = nullptr;
+    QWidget* m_guidanceBlocker = nullptr;
+    QWidget* m_guidanceTipTarget = nullptr;
+    QWidget* m_dismissedGuidanceTarget = nullptr;
+    QFrame* m_guidanceBorder = nullptr;
+    QGraphicsOpacityEffect* m_guidanceBorderEffect = nullptr;
+    QPropertyAnimation* m_guidanceBorderAnimation = nullptr;
+    bool m_guidanceBorderAcknowledged = false;
+    bool m_guidanceInputLocked = false;
+    bool m_guidanceTourRequested = false;
+    bool m_compileNavigationGuidancePending = false;
+    bool m_hasAddedFirstModel = false;
+    bool m_sessionRestoreChecked = false;
+    bool m_adaptiveFontUpdatePending = false;
 
     CombinedPrecheckReport m_latestReport;
     FleetSessionReport m_latestFleetReport;

@@ -138,7 +138,6 @@ QPushButton
 	border-radius: 0px;
 	border:1px solid rgba(202, 219, 245, 255);
 	font: 14px;
-	width:72px;
 	min-height:24px;
 }
 QPushButton:hover
@@ -3004,7 +3003,7 @@ QLabel.statusBadge {
 
 /* 分步预检工作流 - 方案D 墨绿工业风 */
 QLabel[workflowStep="true"] {
-    padding: 7px 8px;
+    padding: 8px 10px;
     border-radius: 5px;
     border: 1px solid #2d3f4f;
     background-color: #1a242e;
@@ -3146,7 +3145,7 @@ QPushButton {
     color: #e2e8f0;
     border: 1px solid #2d3f4f;
     border-radius: 4px;
-    padding: 4px 10px;
+    padding: 6px 12px;
 }
 QPushButton:hover {
     background-color: #134e4a;
@@ -3184,7 +3183,7 @@ QHeaderView::section {
     background-color: #1e3a34;
     color: #e2e8f0;
     border: 1px solid #2d3f4f;
-    padding: 5px;
+    padding: 7px 9px;
 }
 QTableWidget {
     alternate-background-color: #141f1c;
@@ -3249,7 +3248,7 @@ QLabel[pageHint="true"] {
 /* 统一字体、表格文字与勾选框 */
 QWidget {
     font-family: "Microsoft YaHei UI";
-    font-size: 13px;
+    font-size: 9pt;
 }
 QTableWidget, QTableView, QTableWidget:disabled, QTableView:disabled,
 QHeaderView::section {
@@ -3315,12 +3314,11 @@ QCheckBox::indicator:hover {
     border-color: #14b8a6;
 }
 
-/* 紧凑导航与项目分界线 */
+/* 紧凑导航与项目分界线；字号由控件当前空间动态计算 */
 QListWidget[testNavigation="true"]::item {
     min-height: 32px;
-    padding: 5px 7px;
+    padding: 6px 10px;
     margin: 0;
-    font-size: 12px;
     font-weight: bold;
     border-left: 3px solid transparent;
     border-bottom: 1px solid #2d3f4f;
@@ -3344,5 +3342,30 @@ QTableWidget#randomVarsTable {
 }
 QTableWidget#randomVarsTable::item {
     padding: 2px 4px;
+}
+
+/* 随机变量类型下拉框：覆盖旧主题中 focus/hover 的白色背景。 */
+QTableWidget#randomVarsTable QComboBox,
+QTableWidget#randomVarsTable QComboBox:focus,
+QTableWidget#randomVarsTable QComboBox:hover,
+QTableWidget#randomVarsTable QComboBox:on {
+    background-color: #0c1218;
+    color: #e2e8f0;
+    border: 1px solid #2d3f4f;
+    border-radius: 3px;
+    padding-left: 5px;
+}
+QTableWidget#randomVarsTable QComboBox:focus,
+QTableWidget#randomVarsTable QComboBox:on {
+    background-color: #134e4a;
+    color: #ffffff;
+    border-color: #14b8a6;
+}
+QTableWidget#randomVarsTable QComboBox QAbstractItemView {
+    background-color: #141c24;
+    color: #e2e8f0;
+    selection-background-color: #134e4a;
+    selection-color: #ffffff;
+    border: 1px solid #2d3f4f;
 }
 
