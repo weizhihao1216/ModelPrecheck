@@ -31,6 +31,8 @@ class QmlAppController : public QObject {
     Q_PROPERTY(QString selectedUserMain READ selectedUserMain NOTIFY modelDetailsChanged)
     Q_PROPERTY(QVariantList selectedRandomVars READ selectedRandomVars NOTIFY modelDetailsChanged)
     Q_PROPERTY(QString configurationMessage READ configurationMessage NOTIFY modelDetailsChanged)
+    // 编译日志全文（cl.exe 的输出可能很长），在「随机变量」下方的日志面板里滚动查看。
+    Q_PROPERTY(QString compileLog READ compileLog NOTIFY modelDetailsChanged)
     Q_PROPERTY(QVariantList selectedPackageContents READ selectedPackageContents NOTIFY modelDetailsChanged)
     Q_PROPERTY(bool selectedPackageLayoutValid READ selectedPackageLayoutValid NOTIFY modelDetailsChanged)
     Q_PROPERTY(QString selectedPackageSummary READ selectedPackageSummary NOTIFY modelDetailsChanged)
@@ -110,6 +112,7 @@ public:
     QString selectedUserMain() const;
     QVariantList selectedRandomVars() const;
     QString configurationMessage() const { return m_configurationMessage; }
+    QString compileLog() const { return m_compileLog; }
     QVariantList selectedPackageContents() const;
     bool selectedPackageLayoutValid() const;
     QString selectedPackageSummary() const;
@@ -273,6 +276,7 @@ private:
     bool m_hasSnapshot = false;
     int m_selectedModelIndex = -1;
     QString m_configurationMessage;
+    QString m_compileLog;
     bool m_compileBusy = false;
     double m_busyProgress = -1.0;
 

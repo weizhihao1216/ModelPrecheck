@@ -1,5 +1,6 @@
 <!DOCTYPE RCC><RCC version="1.0">
 <qresource prefix="/">
+    <file>core/ModelObjectKit.h</file>
     <file>qml/AppButton.qml</file>
     <file>qml/AppComboBox.qml</file>
     <file>qml/AppSpinBox.qml</file>

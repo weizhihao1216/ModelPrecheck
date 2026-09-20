@@ -1,6 +1,7 @@
 #include "MultiObjectHarness.h"
 #include "../utils/MemoryUtils.h"
 #include "../utils/QtEncoding.h"
+#include <QCoreApplication>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -398,12 +399,19 @@ std::string MultiObjectHarness::DefaultAdapterTemplate() {
         "};\n";
 }
 
+// 与单对象 Harness 同样必须优先读打进资源的副本，不能用 __FILE__ 去源码目录取，
+// 否则换一台机器运行时会生成 #error "ModelObjectKit.h not found"（详见 UserCodeHarness.cpp）。
 std::string MultiObjectHarness::LoadModelObjectKitHeader() {
-    QFileInfo self(QString::fromUtf8(__FILE__));
-    QFile file(self.absoluteDir().filePath(QStringLiteral("ModelObjectKit.h")));
-    if (!file.open(QIODevice::ReadOnly))
-        return std::string("#error \"ModelObjectKit.h not found\"\n");
-    return file.readAll().toStdString();
+    QStringList candidates;
+    candidates << QStringLiteral(":/core/ModelObjectKit.h")
+               << QDir(QCoreApplication::applicationDirPath())
+                      .filePath(QStringLiteral("ModelObjectKit.h"));
+    for (const QString& path : candidates) {
+        QFile file(path);
+        if (file.open(QIODevice::ReadOnly))
+            return file.readAll().toStdString();
+    }
+    return std::string("#error \"ModelObjectKit.h not found\"\n");
 }
 
 std::string MultiObjectHarness::GenerateUserPoolSource(
@@ -743,8 +751,10 @@ bool MultiObjectHarness::InvokeCl(const MultiObjectHarnessConfig& config,
         log += "ERROR: 多对象 Harness 编译超时或无法启动\n";
         return false;
     }
-    log += qToUtf8(QString::fromLocal8Bit(process.readAllStandardOutput()));
-    log += qToUtf8(QString::fromLocal8Bit(process.readAllStandardError()));
+    // 编译器输出可能是系统 ANSI（中文系统为 GBK），也可能是 UTF-8；
+    // 直接按 fromLocal8Bit 解会在 UTF-8 输出时出错，统一走 qDecodeLog 判别。
+    log += qToUtf8(qDecodeLog(process.readAllStandardOutput().toStdString()));
+    log += qToUtf8(qDecodeLog(process.readAllStandardError().toStdString()));
     return process.exitCode() == 0 && QFileInfo::exists(qPath(outputDll));
 }
 

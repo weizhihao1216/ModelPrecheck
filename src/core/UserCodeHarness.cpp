@@ -1,10 +1,12 @@
 #include "UserCodeHarness.h"
 #include "../utils/SehHelper.h"
+#include "../utils/QtEncoding.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <QStringList>
 #include <fstream>
 #include <sstream>
 #include <random>
@@ -22,13 +24,22 @@
 
 namespace {
 
-// 与多对象 Harness 使用同一份 ModelObjectKit.h，保证同一段用户代码两边都能编译
+// 与多对象 Harness 使用同一份 ModelObjectKit.h，保证同一段用户代码两边都能编译。
+// 注意：必须优先读「打进资源的副本」。早期版本用 __FILE__ 去源码目录取这个头文件，
+// 只在“运行机器的源码路径和编译机相同”时才读得到；换一台机器（例如部署到
+// F:\huaru\tools\dist(9)\dist）就会生成 #error "ModelObjectKit.h not found"，
+// 导致所有型号都编译失败。
 std::string LoadModelObjectKitHeader() {
-    QFileInfo self(QString::fromUtf8(__FILE__));
-    QFile file(self.absoluteDir().filePath(QStringLiteral("ModelObjectKit.h")));
-    if (!file.open(QIODevice::ReadOnly))
-        return std::string("#error \"ModelObjectKit.h not found\"\n");
-    return file.readAll().toStdString();
+    QStringList candidates;
+    candidates << QStringLiteral(":/core/ModelObjectKit.h")
+               << QDir(QCoreApplication::applicationDirPath())
+                      .filePath(QStringLiteral("ModelObjectKit.h"));
+    for (const QString& path : candidates) {
+        QFile file(path);
+        if (file.open(QIODevice::ReadOnly))
+            return file.readAll().toStdString();
+    }
+    return std::string("#error \"ModelObjectKit.h not found\"\n");
 }
 
 } // namespace
@@ -724,7 +735,7 @@ bool UserCodeHarness::InvokeCl(const UserHarnessConfig& config, const std::strin
             DWORD rd = 0;
             if (!ReadFile(hRead, buf, want, &rd, nullptr) || rd == 0) break;
             buf[rd] = 0;
-            log += buf;
+            log += qToUtf8(qDecodeLog(std::string(buf, static_cast<size_t>(rd))));
             continue;
         }
         if (WaitForSingleObject(pi.hProcess, waitSliceMs) == WAIT_OBJECT_0) {
@@ -736,7 +747,7 @@ bool UserCodeHarness::InvokeCl(const UserHarnessConfig& config, const std::strin
                 DWORD rd = 0;
                 if (!ReadFile(hRead, buf, rest, &rd, nullptr) || rd == 0) break;
                 buf[rd] = 0;
-                log += buf;
+                log += qToUtf8(qDecodeLog(std::string(buf, static_cast<size_t>(rd))));
             }
             break;
         }

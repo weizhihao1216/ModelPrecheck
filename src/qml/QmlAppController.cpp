@@ -50,6 +50,36 @@ QString DisplayName(const SessionModelSnapshot& model, int index) {
     return name.isEmpty() ? QStringLiteral("型号 %1").arg(index + 1) : name;
 }
 
+// 取编译日志最后一行非空内容作为状态栏的一句话结论
+// （cl.exe 的最后一行通常就是失败根因），日志全文另在页面右侧面板展示。
+QString LastLogLine(const QString& log) {
+    const QStringList lines = log.split('\n');
+    for (int i = static_cast<int>(lines.size()) - 1; i >= 0; --i) {
+        const QString line = lines.at(i).trimmed();
+        if (!line.isEmpty())
+            return line;
+    }
+    return QStringLiteral("请检查模型包和 UserMain 代码。");
+}
+
+// 日志里那条 CMD: 命令行有上千字符，会把真正的报错挤到屏幕外；
+// 展示时把它挪到末尾，让用户一眼先看到编译器的错误。
+QString ReorderLogForDisplay(const QString& log) {
+    const QStringList lines = log.split('\n');
+    QStringList head;
+    QStringList commands;
+    for (const QString& line : lines) {
+        if (line.startsWith(QStringLiteral("CMD:")))
+            commands << line;
+        else
+            head << line;
+    }
+    if (commands.isEmpty())
+        return log;
+    return (head.join('\n').trimmed() + QStringLiteral("\n\n")
+            + commands.join('\n')).trimmed();
+}
+
 std::vector<RandomVarDef> DefaultRandomVars() {
     std::vector<RandomVarDef> vars;
     auto append = [&vars](const char* name, double minimum, double maximum) {
@@ -1029,6 +1059,7 @@ void QmlAppController::selectModel(int modelIndex) {
     const bool changed = m_selectedModelIndex != modelIndex;
     m_selectedModelIndex = modelIndex;
     m_configurationMessage.clear();
+    m_compileLog.clear();
     m_multiObjectMessage.clear();
     m_multiObjectResultItems.clear();
     m_multiObjectTrajectories.clear();
@@ -1676,6 +1707,8 @@ void QmlAppController::compileSelectedModel(const QString& code) {
     const CompileResult result = compileSnapshotModel(*model, m_selectedModelIndex);
     model = selectedSnapshotModel();
     if (model) {
+        const QString fullLog = QString::fromUtf8(result.log.c_str()).trimmed();
+        m_compileLog = ReorderLogForDisplay(fullLog);
         if (result.success) {
             model->status = QStringLiteral("已加载");
             model->lastUserHarnessDll = QString::fromUtf8(result.dllPath.c_str());
@@ -1684,12 +1717,12 @@ void QmlAppController::compileSelectedModel(const QString& code) {
         } else {
             model->status = QStringLiteral("编译失败");
             model->lastUserHarnessDll.clear();
-            const QString log = QString::fromUtf8(result.log.c_str()).trimmed();
-            m_configurationMessage = log.isEmpty()
-                ? QStringLiteral("编译失败，请检查模型包和 UserMain 代码。")
-                : QStringLiteral("编译失败：%1").arg(log.right(320));
+            // 状态栏只放一行结论（日志全文在「随机变量」下方的日志面板里滚动查看），
+            // 之前把日志尾部 320 字硬塞进状态栏，多行文本会溢出到按钮上、根本看不清。
+            m_configurationMessage = QStringLiteral("编译失败：%1").arg(LastLogLine(fullLog));
             appendLog(QStringLiteral("编译失败：%1").arg(selectedModelName()));
         }
+        emit modelDetailsChanged();
     }
     emit logsChanged();
     saveSnapshot();
@@ -1711,6 +1744,7 @@ void QmlAppController::compileAllModelsInQml(const QString& currentCode) {
     emit compileStateChanged();
     int succeeded = 0;
     QString lastFailure;
+    QString allLog;
     const int total = static_cast<int>(m_snapshot.models.size());
     for (int i = 0; i < total; ++i) {
         SessionModelSnapshot& model = m_snapshot.models[static_cast<size_t>(i)];
@@ -1742,6 +1776,9 @@ void QmlAppController::compileAllModelsInQml(const QString& currentCode) {
         }
 
         const CompileResult result = compileSnapshotModel(model, i);
+        allLog += QStringLiteral("===== %1 =====\n").arg(name);
+        allLog += QString::fromUtf8(result.log.c_str()).trimmed();
+        allLog += QStringLiteral("\n\n");
         if (result.success) {
             model.status = QStringLiteral("已加载");
             model.lastUserHarnessDll = QString::fromUtf8(result.dllPath.c_str());
@@ -1757,6 +1794,7 @@ void QmlAppController::compileAllModelsInQml(const QString& currentCode) {
         setBusyProgress(static_cast<double>(i + 1) / total);
     }
 
+    m_compileLog = ReorderLogForDisplay(allLog.trimmed());
     if (succeeded == static_cast<int>(m_snapshot.models.size())) {
         m_configurationMessage = QStringLiteral("全部 %1 个型号编译成功，可以执行一键预检。")
             .arg(succeeded);
@@ -1773,6 +1811,7 @@ void QmlAppController::compileAllModelsInQml(const QString& currentCode) {
     // 先刷新看板（compiledCount/pendingCount），再通知编译状态，
     // 这样 QML 在 compileStateChanged 里读到的是最终的待编译数量。
     rebuildDashboardFromSnapshot();
+    emit modelDetailsChanged();
     emit compileStateChanged();
 }
 

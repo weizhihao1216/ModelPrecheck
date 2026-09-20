@@ -225,13 +225,14 @@ ApplicationWindow {
                             anchors.verticalCenter: parent.verticalCenter
                         }
 
-                        Row {
+                        RowLayout {
                             anchors.verticalCenter: parent.verticalCenter
                             anchors.left: parent.left
                             anchors.leftMargin: 17
                             spacing: 14
                             Text {
-                                width: 27
+                                Layout.preferredWidth: 27
+                                Layout.alignment: Qt.AlignVCenter
                                 text: modelData.mark
                                 color: modelData.active ? window.teal : window.secondaryInk
                                 font.pixelSize: modelData.action === 1 ? 12 : 19
@@ -239,6 +240,10 @@ ApplicationWindow {
                                 horizontalAlignment: Text.AlignHCenter
                             }
                             Text {
+                                Layout.alignment: Qt.AlignVCenter
+                                // 与侧栏底部「设置」同样：行盒居中后文字仍偏高 1.5px（见该处注释），
+                                // 用 topMargin=3（下移 1.5px）让文字正对图标中心。
+                                Layout.topMargin: 3
                                 text: modelData.label
                                 color: modelData.active ? window.tealDark : window.ink
                                 font.pixelSize: 14
@@ -273,13 +278,29 @@ ApplicationWindow {
                     height: 48
                     radius: 7
                     color: settingsMouse.containsMouse ? "#f4f7fa" : "transparent"
-                    Row {
+                    // 图标与文字垂直对齐：Row 是顶部对齐（差 4.5px），RowLayout+AlignVCenter 只对齐行盒。
+                    // 行盒居中后仍差 1.5px（字号 19/14 不同，字形墨迹在行盒里的位置不同）；
+                    // 残差按实际渲染像素量得（齿轮墨迹中心 26.5、文字 25.0），
+                    // 故给文字 topMargin=3 —— 布局把项下移 topMargin/2，取整后为 2px，
+                    // 实测两者墨迹中心只差 0.5px（像素取整下的最小残差）。
+                    RowLayout {
                         anchors.left: parent.left
                         anchors.leftMargin: 18
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 14
-                        Text { text: "⚙"; color: window.secondaryInk; font.pixelSize: 19 }
-                        Text { text: qsTr("设置"); color: window.ink; font.pixelSize: 14 }
+                        Text {
+                            Layout.alignment: Qt.AlignVCenter
+                            text: "⚙"
+                            color: window.secondaryInk
+                            font.pixelSize: 19
+                        }
+                        Text {
+                            Layout.alignment: Qt.AlignVCenter
+                            Layout.topMargin: 3
+                            text: qsTr("设置")
+                            color: window.ink
+                            font.pixelSize: 14
+                        }
                     }
                     MouseArea {
                         id: settingsMouse
@@ -1041,13 +1062,6 @@ ApplicationWindow {
                                 color: window.secondaryInk
                                 font.pixelSize: 11
                                 elide: Text.ElideMiddle
-                            }
-                            Text {
-                                Layout.fillWidth: true
-                                text: qsTr("界面按 Qt 逻辑像素自适应，当前窗口 %1 × %2，系统缩放 %3%。")
-                                      .arg(window.width).arg(window.height).arg(Math.round(Screen.devicePixelRatio * 100))
-                                color: window.secondaryInk
-                                font.pixelSize: 11
                             }
                         }
                     }
@@ -2422,9 +2436,12 @@ ApplicationWindow {
                                     font.weight: Font.Bold
                                 }
                                 Text {
-                                    // 窄窗口下隐藏提示文案：它不可换行/省略，会把整列的最小宽度
-                                    // 撑到 560 以上，导致代码框无法收进中间列（见 codeEditorFrame）。
-                                    visible: window.width >= 1400
+                                    // 提示文案必须可省略、且不参与最小宽度：
+                                    // 它不可换行时会给整列定下 500+ 的最小宽度，窗口一旦
+                                    // 装不下，整列（含代码卡片）就被撑宽、盖掉右侧 16px 间距。
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    elide: Text.ElideRight
                                     text: qsTr("MoCreate / MoInit / MoStep / MoDestroy · 所有测试项共用")
                                     color: window.secondaryInk
                                     font.pixelSize: 11
@@ -3055,6 +3072,59 @@ ApplicationWindow {
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
                                     font.pixelSize: 12
+                                }
+                            }
+                        }
+                        // 编译状态与日志全文：状态栏只有一行放不下 cl.exe 的完整输出，
+                        // 这里放在随机变量下方的空白区域，可换行、可滚动、可选中复制。
+                        Rectangle {
+                            visible: appController.compileLog.length > 0
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 172
+                            Layout.minimumHeight: 96
+                            radius: 6
+                            color: appController.configurationMessage.indexOf(qsTr("失败")) >= 0
+                                   ? "#fff7f7" : "#f7fafc"
+                            border.color: appController.configurationMessage.indexOf(qsTr("失败")) >= 0
+                                          ? "#f1c2c6" : window.line
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 10
+                                spacing: 6
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text {
+                                        text: qsTr("编译日志")
+                                        color: window.ink
+                                        font.pixelSize: 12
+                                        font.weight: Font.DemiBold
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                    Text {
+                                        text: qsTr("可选中复制")
+                                        color: window.secondaryInk
+                                        font.pixelSize: 9
+                                    }
+                                }
+                                ScrollView {
+                                    id: compileLogScroll
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    Layout.minimumWidth: 0
+                                    clip: true
+                                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                                    ScrollBar.vertical.policy: ScrollBar.AsNeeded
+                                    TextArea {
+                                        width: compileLogScroll.availableWidth
+                                        readOnly: true
+                                        selectByMouse: true
+                                        text: appController.compileLog
+                                        wrapMode: TextArea.Wrap
+                                        color: "#33415c"
+                                        font.family: "Consolas"
+                                        font.pixelSize: 10
+                                        background: Rectangle { color: "transparent" }
+                                    }
                                 }
                             }
                         }
