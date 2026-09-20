@@ -67,4 +67,29 @@ bool SafeCallInitEx(FnModelInitEx fn, ModelHandle handle, const WeaponModelParam
 bool SafeCallStepEx(FnModelStepEx fn, ModelHandle handle, WeaponModelOutput* output, int* outResult, DWORD* outExceptionCode);
 bool SafeCallDestroyEx(FnModelDestroyEx fn, ModelHandle handle, DWORD* outExceptionCode);
 
+/**
+ * 加载被测模块的私有副本（永不卸载）。
+ *
+ * 为什么不能对被测模块调用 FreeLibrary：模型在测试中可能破坏自身状态（例如单实例模型被要求
+ * 创建多个对象时越界写入自己的静态数据），其 DETACH 代码可能死循环。DETACH 是在装载锁
+ * （loader lock）内执行的，一旦卡住，本进程之后任何 LoadLibrary / FreeLibrary——包括打开
+ * 文件对话框时加载 Shell 扩展——都会永久阻塞，表现为整个程序假死且无法恢复。
+ * 因此这里改为：把模块复制成唯一路径的副本再加载，并且从不卸载它。
+ * 既保证每次加载都是全新的模块状态，又完全不执行被测模块的 DETACH 代码。
+ *
+ * @param sourcePath  源 DLL 路径（UTF-8）
+ * @param copyDir     副本目录（UTF-8；传空则使用源 DLL 所在目录，便于依赖 DLL 被找到）
+ * @param outCopyPath 实际加载的副本路径（UTF-8，可为空）
+ * @param error       失败原因（可为空）
+ * @return 模块句柄；失败返回 nullptr
+ */
+HMODULE LoadPrivateModuleCopy(const std::string& sourcePath, const std::string& copyDir,
+                              std::string* outCopyPath = nullptr, std::string* error = nullptr);
+
+/** 进程内是否加载过私有副本；为真时进程退出需直接终止，否则会卡在副本的 DETACH 上。 */
+bool HasLoadedPrivateModule();
+
+/** 清理上次运行遗留的私有副本（请在进程启动、尚未加载任何副本时调用）。 */
+void CleanupPrivateModuleCopies(const std::string& modelsRootDir);
+
 #endif // SEH_HELPER_H

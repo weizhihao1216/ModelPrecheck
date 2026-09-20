@@ -40,7 +40,6 @@ QJsonObject modelToJson(const SessionModelSnapshot& model) {
         headers.append(h);
     o.insert(QStringLiteral("headerPaths"), headers);
     o.insert(QStringLiteral("userMainBody"), model.userMainBody);
-    o.insert(QStringLiteral("userMultiObjectBody"), model.userMultiObjectBody);
     QJsonArray vars;
     for (const auto& v : model.randomVars)
         vars.append(randomVarToJson(v));
@@ -53,7 +52,6 @@ QJsonObject modelToJson(const SessionModelSnapshot& model) {
     o.insert(QStringLiteral("multiObjectSchedule"), model.multiObjectSchedule);
     o.insert(QStringLiteral("status"), model.status);
     o.insert(QStringLiteral("lastUserHarnessDll"), model.lastUserHarnessDll);
-    o.insert(QStringLiteral("lastMultiObjectHarnessDll"), model.lastMultiObjectHarnessDll);
     return o;
 }
 
@@ -64,7 +62,6 @@ SessionModelSnapshot modelFromJson(const QJsonObject& o) {
     for (const auto& v : o.value(QStringLiteral("headerPaths")).toArray())
         model.headerPaths.append(v.toString());
     model.userMainBody = o.value(QStringLiteral("userMainBody")).toString();
-    model.userMultiObjectBody = o.value(QStringLiteral("userMultiObjectBody")).toString();
     for (const auto& v : o.value(QStringLiteral("randomVars")).toArray())
         model.randomVars.push_back(randomVarFromJson(v.toObject()));
     model.instanceCount = o.value(QStringLiteral("instanceCount")).toInt(1);
@@ -75,8 +72,6 @@ SessionModelSnapshot modelFromJson(const QJsonObject& o) {
     model.multiObjectSchedule = o.value(QStringLiteral("multiObjectSchedule")).toInt(0);
     model.status = o.value(QStringLiteral("status")).toString(QStringLiteral("未编译"));
     model.lastUserHarnessDll = o.value(QStringLiteral("lastUserHarnessDll")).toString();
-    model.lastMultiObjectHarnessDll =
-        o.value(QStringLiteral("lastMultiObjectHarnessDll")).toString();
     return model;
 }
 

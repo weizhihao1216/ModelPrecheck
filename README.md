@@ -17,7 +17,7 @@
 - **场景 / 原因**：厂家常忽略或不提供 Debug 链接库  
 - **工具操作**：添加型号 → 选模型包 → **一键预检**；顶部徽章「Release/Debug」、弹窗与各导航页「可能导致」会标明无法编 Debug  
 - **功能实现**：扫描包内 Debug/Release DLL·LIB；缺 Debug 库时提示无法编译 Debug 及后果；识别 MD/MTd CRT  
-- **实现方式**：`PackageScanner`；`PrecheckSummary`；`PeAnalyzer`；`PrecheckSummaryDialog` / 各页结果面板  
+- **实现方式**：`PackageScanner`；`PrecheckSummary`；`PeAnalyzer`；QML 预检结果面板  
 - **样例**：`ReleaseOnly_A` / `ReleaseOnly_B`（实测：`R=PASS D=FAIL`）
 
 #### 静态 + 动态 · 头文件 / 符号冲突
@@ -46,7 +46,7 @@
 #### 动态 · 多实例 / 状态隔离
 - **现象**：同一武器发射多枚崩溃或状态串扰  
 - **场景 / 原因**：不支持多实例或集成越界  
-- **工具操作**：「单线程多对象」写 `MoCreate/Init/Step/Destroy` → 编译 → **基线与交错**；或「多型号并行」设实例数；可选「跨型号对象交错」  
+- **工具操作**：「型号与代码」写 `MoCreate/Init/Step/Destroy` 并编译一次 →「专项测试 · 单线程多对象」设对象数/容差/调度后 **基线与交错**；或「多型号并行」设实例数；可选「跨型号对象交错」  
 - **功能实现**：基线 vs 单线程 Step 交错；轨迹偏差、返回码、SEH  
 - **实现方式**：`MultiObjectHarness` + `SingleThreadMultiObjectTester` + `FleetSingleThreadMultiObjectTester`  
 - **样例 / 实测**：`SingleInstance_*` 二次 Create 属 UB，**未必当场 SEH**——宜用多对象 `objectCount≥2` 强化暴露；`TcPass_*` 双 Create / 生命周期宜 PASS
@@ -120,12 +120,12 @@
 
 - 规范模型包静态检查（`include/` / `lib/` / `models/`）
 - 受控动态加载与 SEH 硬件异常隔离（一键预检：Release 加载，Debug 跳过）
-- 可编译 `UserMain` 与 `Mo*` 多对象 Harness（「编译当前 / 编译全部」）
+- 可编译统一的 Harness：一份 `Mo*` 对象代码、一次编译产出同时支持单对象与多对象的 DLL（「型号与代码 · 保存并编译」）
 - UserMain 性能压测、内存增长监测（含内存上限）、实时性判定
 - 多型号并行 / 单型号多线程稳定性
-- 单线程多对象基线/交错，以及**跨型号对象交错**
+- 单线程多对象基线/交错（「专项测试 · 单线程多对象」），以及**跨型号对象交错**
 - 二维经纬度轨迹；HTML 预检报告；预检总览四列表（状态 / 原因 / 可能导致）
-- QScintilla 编辑器；BusyOverlay 等候提示
+- 代码编辑器（QML 内建，含 C++ 语法高亮）；忙碌等候提示
 - **关闭自动保存会话**；启动时可选择是否还原
 
 ---
@@ -133,10 +133,9 @@
 ## 2. 技术栈与开发环境
 
 - **编译器**：MSVC（推荐 VS2017+ / VS2022），`/utf-8`，`NOMINMAX`  
-- **UI**：Qt 5.x Widgets + Qt Charts + **QScintilla 2.14.1（静态链入）**  
+- **UI**：QML（Qt Quick Controls 2）+ Qt Charts，入口 `QmlAppController`  
 - **构建**：CMake 3.12+；一键脚本 `build.bat`  
 - **系统 API**：Win32 PE、`LoadLibraryExW`、SEH、`psapi`  
-- **QScintilla**：见 `third_party/README_QScintilla.md`  
 
 ---
 
@@ -195,10 +194,10 @@ YourModelPackage\
 
 1. **添加型号** → 浏览模型包根目录（须含 `include/lib/models`）  
 2. **勾选头文件** → 参与编译与冲突分析  
-3. **编写 UserMain**（Create/Init → Step → Destroy；轨迹需 `RecordTrajectoryPoint`）  
-4. **配置随机变量 `R.*`**  
-5. **编译当前 / 全部** → 输出到 `TestModel\<型号名>\`  
-6. **一键预检** → 静态（含头冲突）+ Release DLL 加载 + 已编译项的压测/并发/多对象等；结束后弹出总览并同步各导航页  
+3. **编写对象生命周期代码**（`MoCreate/MoInit/MoStep/MoDestroy`；轨迹由 Harness 自动采集）  
+4. **配置随机变量 `R.*`**，并在同一页设置**步数 / 步长**（运行期生效，改后无需重新编译）  
+5. **保存并编译**（一次编译即可覆盖全部测试项）→ 输出到 `TestModel\<型号名>\`  
+6. **一键预检** → 静态（含头冲突）+ Release DLL 加载 + 压测/并发/多对象等；未编译但配置完整的型号会自动编译；结束后弹出总览并同步各导航页  
 7. **专项测试**：性能/内存/轨迹、多型号并行、多线程、单线程多对象（含跨型号）  
 8. **导出 HTML 报告**  
 
@@ -208,7 +207,7 @@ YourModelPackage\
 
 - **预检控制**：一键预检、导出报告  
 - **状态 Badges** / **操作流程条** / **功能导航**  
-- **型号与 UserMain**、**测试工作区**、**底部日志**  
+- **型号与代码**、**专项测试**、**底部日志**  
 - 性能页含 **内存上限(MB)**（默认 256；0=不限制）
 
 ### 3.5 样例模型（`dist/sample_models` 测试用例包）
@@ -242,7 +241,7 @@ YourModelPackage\
 - **多型号 / 多线程** — `ConcurrencyTester`  
 - **单线程多对象 / 跨型号交错** — `SingleThreadMultiObjectTester`、`FleetSingleThreadMultiObjectTester`  
 - **预检总览** — `PrecheckSummary`（`dll_load` 区分 SKIP）  
-- **HTML / 会话 / UI** — `ReportGenerator`、`SessionStore`、`BusyOverlayWidget`、`MainWindow`  
+- **HTML / 会话 / UI** — `ReportGenerator`、`SessionStore`、`QmlAppController`  
 
 ### 4.2 需求编号对照（历史 F1–F13）
 
@@ -291,11 +290,12 @@ sample_models/...
 
 修改 `src/utils/SehHelper.h`；同步样例头文件与调用约定。
 
-### 6.2 扩展 UserMain / 多对象 / 轨迹
+### 6.2 扩展对象生命周期代码 / 轨迹
 
-- `UserCodeHarness::DefaultUserMainTemplate()`  
-- `MultiObjectHarness::DefaultUserMultiObjectTemplate()`  
-- 改签名后重新编译 Harness  
+- 一个型号只写一份代码（`MoCreate / MoInit / MoStep / MoDestroy`），预检、压测、并发、多对象全部共用
+- `UserCodeHarness::GenerateUnifiedSource()` — 统一 Harness 源码生成器，`MultiObjectHarness` 复用同一份源码
+- 步数 / 步长由 `UserCodeHarness::SetStepParams()` 在**运行期**传入（界面取「型号与代码」页设置），改动无需重新编译
+- 改签名后重新编译 Harness
 
 ### 6.3 扩展校验与报告
 
@@ -305,8 +305,8 @@ sample_models/...
 
 ### 6.4 会话与 UI
 
-- `SessionStore` / `SessionRestoreDialog`  
-- BusyOverlay：`runBlocking` 在工作线程跑任务，避免在 `setBusyText` 中深度 `processEvents`  
+- QML 界面：`src/qml/Main.qml` + `QmlAppController`（无 Widgets 界面）
+- `SessionStore` 持久化型号、对象代码、随机变量与运行参数
 
 ### 6.5 强制约束（见 AGENTS.md）
 

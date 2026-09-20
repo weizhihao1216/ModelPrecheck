@@ -68,13 +68,11 @@ public:
     void DestroyLiveObject(void* object, int objectId, unsigned long* exceptionCode) const;
 
     static std::string DefaultAdapterTemplate();
-    static std::string DefaultUserMultiObjectTemplate();
 
 private:
     std::string GenerateSource(const MultiObjectHarnessConfig& config) const;
     std::string GenerateUserPoolSource(const UserHarnessConfig& config) const;
     static std::string LoadModelObjectKitHeader();
-    std::string GeneratePerObjectRandomPreamble() const;
     bool InvokeCl(const MultiObjectHarnessConfig& config,
                   const std::string& sourcePath,
                   const std::string& outputDll,

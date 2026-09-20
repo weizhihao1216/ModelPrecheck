@@ -1,4 +1,10 @@
 #include "UserCodeHarness.h"
+#include "../utils/SehHelper.h"
+#include <QCoreApplication>
+#include <QDir>
+#include <QEventLoop>
+#include <QFile>
+#include <QFileInfo>
 #include <fstream>
 #include <sstream>
 #include <random>
@@ -14,6 +20,52 @@
 #endif
 #include <windows.h>
 
+namespace {
+
+// 与多对象 Harness 使用同一份 ModelObjectKit.h，保证同一段用户代码两边都能编译
+std::string LoadModelObjectKitHeader() {
+    QFileInfo self(QString::fromUtf8(__FILE__));
+    QFile file(self.absoluteDir().filePath(QStringLiteral("ModelObjectKit.h")));
+    if (!file.open(QIODevice::ReadOnly))
+        return std::string("#error \"ModelObjectKit.h not found\"\n");
+    return file.readAll().toStdString();
+}
+
+} // namespace
+
+std::string UserCodeHarness::BuildPerObjectRandomPreamble(const std::vector<RandomVarDef>& enabled) {
+    int doubleVarsPerObject = 0;
+    int intVarsPerObject = 0;
+    for (const auto& variable : enabled) {
+        if (variable.type == RandomVarType::Int) ++intVarsPerObject;
+        else ++doubleVarsPerObject;
+    }
+    std::ostringstream source;
+    source << "    static const int kDoubleVarsPerObject = " << doubleVarsPerObject << ";\n"
+           << "    static const int kIntVarsPerObject = " << intVarsPerObject << ";\n"
+           << "    auto fillObjectRandom = [&](int objectId, RandomBag& bag) {\n";
+    int doubleIndex = 0;
+    int intIndex = 0;
+    for (const auto& variable : enabled) {
+        if (variable.type == RandomVarType::Int) {
+            source << "        if (objectId * kIntVarsPerObject + " << intIndex
+                   << " < ni) bag." << variable.name
+                   << " = ivals[objectId * kIntVarsPerObject + " << intIndex << "];\n";
+            ++intIndex;
+        } else {
+            source << "        if (objectId * kDoubleVarsPerObject + " << doubleIndex
+                   << " < nd) bag." << variable.name
+                   << " = dvals[objectId * kDoubleVarsPerObject + " << doubleIndex << "];\n";
+            ++doubleIndex;
+        }
+    }
+    source << "    };\n"
+           << "    std::vector<RandomBag> objectRandoms(static_cast<size_t>(objectCount));\n"
+           << "    for (int objectId = 0; objectId < objectCount; ++objectId)\n"
+           << "        fillObjectRandom(objectId, objectRandoms[static_cast<size_t>(objectId)]);\n";
+    return source.str();
+}
+
 UserCodeHarness::UserCodeHarness() = default;
 
 UserCodeHarness::~UserCodeHarness() {
@@ -22,36 +74,51 @@ UserCodeHarness::~UserCodeHarness() {
 
 std::string UserCodeHarness::DefaultUserMainTemplate() {
     return
-        "// 写完整生命周期即可。压测 / 多线程 / 多型号并发都会直接调用本函数。\n"
-        "// 多型号：每种弹各自编译一份 UserMain（头文件/DLL 可不同），再按数量并行一起跑。\n"
-        "// 授权文件请与 models/ 下的第三方 .dll 同级放置。\n"
+        "// ========== 使用说明（可删除） ==========\n"
+        "// 一个型号只写这一份代码，预检 / 性能压测 / 并发 / 单线程多对象 / 专项测试全部共用。\n"
+        "// 你只需写「单个对象」的生命周期：创建、初始化、推进一步、销毁。\n"
+        "// 步数、步长由工具控制（与单线程多对象页面设置一致），无需自己写循环。\n"
+        "// 每个对象独立抽样一份随机变量包 R，同一对象的 MoInit / MoStep 共用该 R。\n"
+        "// objectId：对象下标（单对象测试时恒为 0）。\n"
+        "// MoStep 的 out_lat / out_lon 由工具自动采集为二维轨迹，不必再调用采集函数。\n"
         "// 模型包目录结构：根目录/include（头文件）、根目录/lib（.lib）、根目录/models（.dll）。\n"
-        "// 每步用 out_lat / out_lon 接收经纬度，并 RecordTrajectoryPoint 供二维轨迹预览。\n"
-        "// 样例模型包：dist/sample_models/PrecheckDemoWeapon（Model_Create/Init/Step/Destroy）\n"
+        "// 授权文件请与 models/ 下的第三方 .dll 同级放置。\n"
+        "// ==========================================\n"
         "\n"
-        "void* handle = Model_Create();\n"
-        "if (!handle) return -1;\n"
+        "// 将 WeaponObject 换成你的第三方封装类（需在型号页勾选对应头文件）\n"
+        "using MoModelType = WeaponObject;\n"
         "\n"
-        "WeaponModelParams p{};\n"
-        "p.init_lat = R.lat;\n"
-        "p.init_lon = R.lon;\n"
-        "p.init_alt = R.alt;\n"
-        "p.init_speed = R.speed;\n"
-        "p.init_heading = 45.0;\n"
-        "p.init_pitch = 15.0;\n"
-        "p.init_roll = 0.0;\n"
-        "p.step_dt = 0.02;\n"
-        "\n"
-        "if (Model_Init(handle, &p) != 0) { Model_Destroy(handle); return -1; }\n"
-        "for (int i = 0; i < 100; ++i) {\n"
-        "    WeaponModelOutput o{};\n"
-        "    if (Model_Step(handle, &o) != 0) { Model_Destroy(handle); return -2; }\n"
-        "    double out_lat = o.lat;\n"
-        "    double out_lon = o.lon;\n"
-        "    RecordTrajectoryPoint(out_lat, out_lon);\n"
+        "// 【创建】只写 new 一个对象\n"
+        "static MoModelType* MoCreate(int objectId, const RandomBag& R) {\n"
+        "    (void)objectId;\n"
+        "    (void)R;\n"
+        "    return new MoModelType();\n"
         "}\n"
-        "Model_Destroy(handle);\n"
-        "return 0;\n";
+        "\n"
+        "// 【初始化】只写对一个对象的 init\n"
+        "static int MoInit(MoModelType* obj, int objectId, const RandomBag& R, double dt) {\n"
+        "    return obj->Initialize(objectId, R.lat, R.lon, R.alt, R.speed, dt);\n"
+        "}\n"
+        "\n"
+        "// 【步进】只写对一个对象推进一步（如 obj->run()）\n"
+        "// out_lat / out_lon：本步经纬度，工具自动记录并用于二维轨迹预览\n"
+        "static int MoStep(MoModelType* obj, int objectId, int stepIndex, double dt,\n"
+        "                  const RandomBag& R,\n"
+        "                  double& out_lat, double& out_lon) {\n"
+        "    (void)objectId;\n"
+        "    (void)stepIndex;\n"
+        "    (void)dt;\n"
+        "    (void)R;\n"
+        "    int rc = obj->Step(out_lat, out_lon);\n"
+        "    return rc;\n"
+        "}\n"
+        "\n"
+        "// 【销毁】只写销毁一个对象\n"
+        "static void MoDestroy(MoModelType* obj, int objectId) {\n"
+        "    (void)objectId;\n"
+        "    obj->Shutdown();\n"
+        "    delete obj;\n"
+        "}\n";
 }
 
 std::string UserCodeHarness::FindVcVars64Bat() {
@@ -120,15 +187,27 @@ std::string UserCodeHarness::FindVcVars64Bat() {
 }
 
 std::string UserCodeHarness::GenerateSource(const UserHarnessConfig& config, const std::vector<RandomVarDef>& enabled) const {
+    return GenerateUnifiedSource(config, enabled);
+}
+
+// 单对象与多对象共用同一个 Harness：一份用户代码、一个 DLL、一次编译
+std::string UserCodeHarness::GenerateUnifiedSource(const UserHarnessConfig& config, const std::vector<RandomVarDef>& enabled) {
     std::ostringstream ss;
     ss << "// Auto-generated by ModelPrecheck UserCodeHarness — do not edit permanently\n";
-    ss << "#define NOMINMAX\n";
+    ss << "#ifndef NOMINMAX\n#define NOMINMAX\n#endif\n";
     ss << "#include <windows.h>\n";
     ss << "#include <cstdint>\n";
     ss << "#include <cstring>\n";
     ss << "#include <cmath>\n";
+    ss << "#include <algorithm>\n";
+    ss << "#include <chrono>\n";
+    ss << "#include <functional>\n";
+    ss << "#include <numeric>\n";
+    ss << "#include <random>\n";
     ss << "#include <string>\n";
+    ss << "#include <utility>\n";
     ss << "#include <vector>\n\n";
+    ss << LoadModelObjectKitHeader() << "\n";
 
     for (const auto& h : config.headerPaths) {
         // Use forward slashes in include string
@@ -150,7 +229,10 @@ std::string UserCodeHarness::GenerateSource(const UserHarnessConfig& config, con
     }
     ss << "};\n\n";
 
-    // Trajectory buffer available to UserMain via RecordTrajectoryPoint(out_lat, out_lon)
+    // 用户代码：MoModelType / MoCreate / MoInit / MoStep / MoDestroy
+    ss << config.userMainBody << "\n\n";
+
+    // Trajectory buffer available to the harness via RecordTrajectoryPoint(lat, lon)
     ss << "static std::vector<double> g_trajLat;\n";
     ss << "static std::vector<double> g_trajLon;\n";
     ss << "static int g_trajCapture = 0;\n\n";
@@ -173,14 +255,47 @@ std::string UserCodeHarness::GenerateSource(const UserHarnessConfig& config, con
     ss << "    return 1;\n";
     ss << "}\n\n";
 
-    ss << "static int UserMain(const RandomBag& R) {\n";
-    ss << config.userMainBody << "\n";
+    // 与多对象 Harness 完全相同的分阶段 SEH 包装
+    ss << "using UserMoObject = decltype(MoCreate(0, std::declval<const RandomBag&>()));\n\n";
+    ss << "static int SafeMoInit(UserMoObject object, int objectId, const RandomBag* random,\n";
+    ss << "                      double dt, unsigned long* exceptionCode) {\n";
+    ss << "    __try {\n";
+    ss << "        *exceptionCode = 0;\n";
+    ss << "        return MoInit(object, objectId, *random, dt);\n";
+    ss << "    } __except (EXCEPTION_EXECUTE_HANDLER) {\n";
+    ss << "        *exceptionCode = GetExceptionCode();\n";
+    ss << "        return -32000;\n";
+    ss << "    }\n";
+    ss << "}\n\n";
+    ss << "static int SafeMoStep(UserMoObject object, int objectId, int step, double dt,\n";
+    ss << "                      const RandomBag* random,\n";
+    ss << "                      double* lat, double* lon, unsigned long* exceptionCode) {\n";
+    ss << "    __try {\n";
+    ss << "        *exceptionCode = 0;\n";
+    ss << "        return MoStep(object, objectId, step, dt, *random, *lat, *lon);\n";
+    ss << "    } __except (EXCEPTION_EXECUTE_HANDLER) {\n";
+    ss << "        *exceptionCode = GetExceptionCode();\n";
+    ss << "        return -32000;\n";
+    ss << "    }\n";
+    ss << "}\n\n";
+    ss << "static void SafeMoDestroy(UserMoObject object, int objectId,\n";
+    ss << "                          unsigned long* exceptionCode) {\n";
+    ss << "    __try {\n";
+    ss << "        *exceptionCode = 0;\n";
+    ss << "        MoDestroy(object, objectId);\n";
+    ss << "    } __except (EXCEPTION_EXECUTE_HANDLER) {\n";
+    ss << "        *exceptionCode = GetExceptionCode();\n";
+    ss << "    }\n";
     ss << "}\n\n";
 
+    // ---------- 单对象生命周期（步数/步长运行期传入，与多对象语义一致） ----------
     ss << "extern \"C\" __declspec(dllexport) int RunUserTest(\n";
     ss << "    const double* dvals, int nd,\n";
-    ss << "    const int* ivals, int ni)\n";
+    ss << "    const int* ivals, int ni,\n";
+    ss << "    int stepCount, double dt)\n";
     ss << "{\n";
+    ss << "    if (stepCount < 1) stepCount = 1;\n";
+    ss << "    if (dt <= 0.0) dt = 0.02;\n";
     ss << "    RandomBag R{};\n";
     int di = 0, ii = 0;
     for (const auto& v : enabled) {
@@ -192,8 +307,260 @@ std::string UserCodeHarness::GenerateSource(const UserHarnessConfig& config, con
             ++di;
         }
     }
-    ss << "    return UserMain(R);\n";
-    ss << "}\n";
+    ss << "    UserMoObject object = MoCreate(0, R);\n";
+    ss << "    unsigned long exceptionCode = 0;\n";
+    ss << "    if (!object) return -1003;\n";
+    ss << "    int rc = SafeMoInit(object, 0, &R, dt, &exceptionCode);\n";
+    ss << "    if (rc != 0 || exceptionCode != 0) {\n";
+    ss << "        unsigned long destroyCode = 0;\n";
+    ss << "        SafeMoDestroy(object, 0, &destroyCode);\n";
+    ss << "        return rc != 0 ? rc : -32000;\n";
+    ss << "    }\n";
+    ss << "    for (int step = 0; step < stepCount; ++step) {\n";
+    ss << "        double lat = 0.0;\n";
+    ss << "        double lon = 0.0;\n";
+    ss << "        rc = SafeMoStep(object, 0, step, dt, &R, &lat, &lon, &exceptionCode);\n";
+    ss << "        if (rc != 0 || exceptionCode != 0) break;\n";
+    ss << "        RecordTrajectoryPoint(lat, lon);\n";
+    ss << "    }\n";
+    ss << "    unsigned long destroyCode = 0;\n";
+    ss << "    SafeMoDestroy(object, 0, &destroyCode);\n";
+    ss << "    if (exceptionCode != 0) return -32000;\n";
+    ss << "    return rc;\n";
+    ss << "}\n\n";
+
+    // ---------- 多对象：基线 + 单线程交错 ----------
+    ss << R"CPP(
+struct TrackPoint { double lat; double lon; };
+struct ObjectResult {
+    int baselineRc = 0;
+    int interleavedRc = 0;
+    int exception = 0;
+    unsigned long exceptionCode = 0;
+    int faultStep = -1;
+    double maxDeviation = 0.0;
+    std::string detail;
+    std::vector<TrackPoint> baseline;
+    std::vector<TrackPoint> interleaved;
+};
+static std::vector<ObjectResult> g_results;
+static double g_maxFrameMs = 0.0;
+
+extern "C" __declspec(dllexport) int RunInterleavedMultiObjectTest(
+    const double* dvals, int nd, const int* ivals, int ni,
+    int objectCount, int stepCount, double dt, double tolerance,
+    int schedule, unsigned int randomSeed) {
+    if (objectCount < 1 || stepCount < 1 || dt <= 0.0) return -1;
+    (void)randomSeed;
+)CPP";
+    ss << BuildPerObjectRandomPreamble(enabled);
+    ss << R"CPP(
+    g_results.assign(static_cast<size_t>(objectCount), ObjectResult{});
+    g_maxFrameMs = 0.0;
+
+    for (int objectId = 0; objectId < objectCount; ++objectId) {
+        auto object = MoCreate(objectId, objectRandoms[static_cast<size_t>(objectId)]);
+        unsigned long exceptionCode = 0;
+        if (!object) {
+            g_results[objectId].baselineRc = -1003;
+            g_results[objectId].detail = "创建对象失败";
+            continue;
+        }
+        int rc = SafeMoInit(object, objectId, &objectRandoms[static_cast<size_t>(objectId)], dt, &exceptionCode);
+        if (rc != 0) {
+            g_results[objectId].baselineRc = rc;
+            g_results[objectId].exceptionCode = exceptionCode;
+            g_results[objectId].exception = exceptionCode != 0;
+            g_results[objectId].detail = "基线初始化失败";
+            SafeMoDestroy(object, objectId, &exceptionCode);
+            continue;
+        }
+        for (int step = 0; step < stepCount; ++step) {
+            double lat = 0.0, lon = 0.0;
+            rc = SafeMoStep(object, objectId, step, dt,
+                            &objectRandoms[static_cast<size_t>(objectId)], &lat, &lon, &exceptionCode);
+            if (rc != 0 || exceptionCode != 0) {
+                g_results[objectId].baselineRc = rc;
+                g_results[objectId].exceptionCode = exceptionCode;
+                g_results[objectId].exception = exceptionCode != 0;
+                g_results[objectId].faultStep = step;
+                g_results[objectId].detail = "基线步进失败";
+                break;
+            }
+            g_results[objectId].baseline.push_back({lat, lon});
+        }
+        SafeMoDestroy(object, objectId, &exceptionCode);
+    }
+
+    std::vector<UserMoObject> objects(static_cast<size_t>(objectCount), UserMoObject{});
+    for (int objectId = 0; objectId < objectCount; ++objectId) {
+        objects[objectId] = MoCreate(objectId, objectRandoms[static_cast<size_t>(objectId)]);
+        unsigned long exceptionCode = 0;
+        if (!objects[objectId]) {
+            g_results[objectId].interleavedRc = -1003;
+            g_results[objectId].detail = "交错创建对象失败";
+            continue;
+        }
+        int rc = SafeMoInit(objects[objectId], objectId,
+                             &objectRandoms[static_cast<size_t>(objectId)], dt, &exceptionCode);
+        if (rc != 0 || exceptionCode != 0) {
+            g_results[objectId].interleavedRc = rc;
+            g_results[objectId].exceptionCode = exceptionCode;
+            g_results[objectId].exception = exceptionCode != 0;
+            g_results[objectId].detail = "交错初始化失败";
+        }
+    }
+
+    std::vector<int> order(static_cast<size_t>(objectCount));
+    std::iota(order.begin(), order.end(), 0);
+    std::mt19937 random(randomSeed);
+    for (int step = 0; step < stepCount; ++step) {
+        if (schedule == 1) std::reverse(order.begin(), order.end());
+        else if (schedule == 2) std::shuffle(order.begin(), order.end(), random);
+        const auto frameStart = std::chrono::high_resolution_clock::now();
+        for (int objectId : order) {
+            ObjectResult& result = g_results[objectId];
+            if (result.interleavedRc != 0 || result.exception || !objects[objectId]) continue;
+            double lat = 0.0, lon = 0.0;
+            unsigned long exceptionCode = 0;
+            const int rc = SafeMoStep(objects[objectId], objectId, step, dt,
+                                      &objectRandoms[static_cast<size_t>(objectId)],
+                                      &lat, &lon, &exceptionCode);
+            if (rc != 0 || exceptionCode != 0) {
+                result.interleavedRc = rc;
+                result.exceptionCode = exceptionCode;
+                result.exception = exceptionCode != 0;
+                result.faultStep = step;
+                result.detail = "交错步进失败";
+                continue;
+            }
+            result.interleaved.push_back({lat, lon});
+        }
+        const auto frameEnd = std::chrono::high_resolution_clock::now();
+        const double frameMs = std::chrono::duration<double, std::milli>(frameEnd - frameStart).count();
+        if (frameMs > g_maxFrameMs) g_maxFrameMs = frameMs;
+        if (schedule == 1) std::reverse(order.begin(), order.end());
+    }
+
+    for (int objectId = 0; objectId < objectCount; ++objectId) {
+        if (!objects[objectId]) continue;
+        unsigned long exceptionCode = 0;
+        SafeMoDestroy(objects[objectId], objectId, &exceptionCode);
+        if (exceptionCode != 0) {
+            g_results[objectId].exception = 1;
+            g_results[objectId].exceptionCode = exceptionCode;
+            g_results[objectId].detail = "销毁对象时发生异常";
+        }
+        const size_t count = (std::min)(g_results[objectId].baseline.size(),
+                                        g_results[objectId].interleaved.size());
+        for (size_t i = 0; i < count; ++i) {
+            const double dLat = g_results[objectId].baseline[i].lat
+                              - g_results[objectId].interleaved[i].lat;
+            const double dLon = g_results[objectId].baseline[i].lon
+                              - g_results[objectId].interleaved[i].lon;
+            const double deviation = std::sqrt(dLat * dLat + dLon * dLon);
+            if (deviation > g_results[objectId].maxDeviation)
+                g_results[objectId].maxDeviation = deviation;
+        }
+        if (g_results[objectId].detail.empty()) {
+            if (g_results[objectId].baseline.size() != g_results[objectId].interleaved.size())
+                g_results[objectId].detail = "基线与交错轨迹点数不一致";
+            else if (g_results[objectId].maxDeviation > tolerance)
+                g_results[objectId].detail = "交错运行结果偏离单独运行基线";
+            else
+                g_results[objectId].detail = "状态隔离正常";
+        }
+    }
+    return 0;
+}
+
+extern "C" __declspec(dllexport) int GetMultiObjectResult(
+    int index, int* baselineRc, int* interleavedRc, int* exception,
+    unsigned long* exceptionCode, int* faultStep, double* maxDeviation,
+    const char** detail, int* baselineCount, int* interleavedCount) {
+    if (index < 0 || index >= static_cast<int>(g_results.size())) return 0;
+    const ObjectResult& result = g_results[static_cast<size_t>(index)];
+    *baselineRc = result.baselineRc;
+    *interleavedRc = result.interleavedRc;
+    *exception = result.exception;
+    *exceptionCode = result.exceptionCode;
+    *faultStep = result.faultStep;
+    *maxDeviation = result.maxDeviation;
+    *detail = result.detail.c_str();
+    *baselineCount = static_cast<int>(result.baseline.size());
+    *interleavedCount = static_cast<int>(result.interleaved.size());
+    return 1;
+}
+extern "C" __declspec(dllexport) int GetMultiObjectTrackPoint(
+    int objectId, int baseline, int pointIndex, double* lat, double* lon) {
+    if (objectId < 0 || objectId >= static_cast<int>(g_results.size())) return 0;
+    const auto& points = baseline ? g_results[objectId].baseline : g_results[objectId].interleaved;
+    if (pointIndex < 0 || pointIndex >= static_cast<int>(points.size())) return 0;
+    *lat = points[pointIndex].lat;
+    *lon = points[pointIndex].lon;
+    return 1;
+}
+extern "C" __declspec(dllexport) double GetMultiObjectMaxFrameMs() {
+    return g_maxFrameMs;
+}
+
+static std::vector<RandomBag> g_sessionRandoms;
+static double g_sessionDt = 0.02;
+
+extern "C" __declspec(dllexport) int MoPool_Prepare(
+    const double* dvals, int nd, const int* ivals, int ni,
+    int objectCount, double dt) {
+    if (objectCount < 1 || dt <= 0.0) return -1;
+    g_sessionDt = dt;
+)CPP";
+    ss << BuildPerObjectRandomPreamble(enabled);
+    ss << R"CPP(
+    g_sessionRandoms = std::move(objectRandoms);
+    return 0;
+}
+
+extern "C" __declspec(dllexport) void* MoPool_Create(int objectId) {
+    if (objectId < 0 || objectId >= static_cast<int>(g_sessionRandoms.size())) return nullptr;
+    return MoCreate(objectId, g_sessionRandoms[static_cast<size_t>(objectId)]);
+}
+
+extern "C" __declspec(dllexport) int MoPool_Init(void* object, int objectId,
+                                                 unsigned long* exceptionCode) {
+    if (exceptionCode) *exceptionCode = 0;
+    if (!object || objectId < 0 || objectId >= static_cast<int>(g_sessionRandoms.size()))
+        return -1;
+    unsigned long localSeh = 0;
+    const int rc = SafeMoInit(reinterpret_cast<UserMoObject>(object), objectId,
+                              &g_sessionRandoms[static_cast<size_t>(objectId)],
+                              g_sessionDt, &localSeh);
+    if (exceptionCode) *exceptionCode = localSeh;
+    return rc;
+}
+
+extern "C" __declspec(dllexport) int MoPool_Step(
+    void* object, int objectId, int step, double* lat, double* lon,
+    unsigned long* exceptionCode) {
+    if (exceptionCode) *exceptionCode = 0;
+    if (!object || !lat || !lon
+        || objectId < 0 || objectId >= static_cast<int>(g_sessionRandoms.size()))
+        return -1;
+    unsigned long localSeh = 0;
+    const int rc = SafeMoStep(reinterpret_cast<UserMoObject>(object), objectId, step, g_sessionDt,
+                              &g_sessionRandoms[static_cast<size_t>(objectId)],
+                              lat, lon, &localSeh);
+    if (exceptionCode) *exceptionCode = localSeh;
+    return rc;
+}
+
+extern "C" __declspec(dllexport) void MoPool_Destroy(void* object, int objectId,
+                                                     unsigned long* exceptionCode) {
+    if (exceptionCode) *exceptionCode = 0;
+    if (!object) return;
+    unsigned long localSeh = 0;
+    SafeMoDestroy(reinterpret_cast<UserMoObject>(object), objectId, &localSeh);
+    if (exceptionCode) *exceptionCode = localSeh;
+}
+)CPP";
     return ss.str();
 }
 
@@ -342,13 +709,46 @@ bool UserCodeHarness::InvokeCl(const UserHarnessConfig& config, const std::strin
         return false;
     }
 
+    // 编译期间必须保持事件循环运转，否则等候弹框的进度动画会整段停住（绿条不动）。
+    // 因此用 PeekNamedPipe 轮询编译器输出，等待时处理 Qt 事件。
     char buf[1024];
-    DWORD rd = 0;
-    while (ReadFile(hRead, buf, sizeof(buf) - 1, &rd, nullptr) && rd > 0) {
-        buf[rd] = 0;
-        log += buf;
+    const DWORD waitSliceMs = 60;
+    DWORD waitedMs = 0;
+    for (;;) {
+        DWORD available = 0;
+        if (!PeekNamedPipe(hRead, nullptr, 0, nullptr, &available, nullptr))
+            break;  // 写端已关闭，输出结束
+        if (available > 0) {
+            const DWORD want = available < sizeof(buf) - 1
+                ? available : static_cast<DWORD>(sizeof(buf) - 1);
+            DWORD rd = 0;
+            if (!ReadFile(hRead, buf, want, &rd, nullptr) || rd == 0) break;
+            buf[rd] = 0;
+            log += buf;
+            continue;
+        }
+        if (WaitForSingleObject(pi.hProcess, waitSliceMs) == WAIT_OBJECT_0) {
+            // 进程已退出：把管道中剩余输出读完
+            while (PeekNamedPipe(hRead, nullptr, 0, nullptr, &available, nullptr)
+                   && available > 0) {
+                const DWORD rest = available < sizeof(buf) - 1
+                    ? available : static_cast<DWORD>(sizeof(buf) - 1);
+                DWORD rd = 0;
+                if (!ReadFile(hRead, buf, rest, &rd, nullptr) || rd == 0) break;
+                buf[rd] = 0;
+                log += buf;
+            }
+            break;
+        }
+        waitedMs += waitSliceMs;
+        if (waitedMs >= 120000) {
+            log += "ERROR: cl.exe 编译超时（120 秒）\n";
+            TerminateProcess(pi.hProcess, 1);
+            break;
+        }
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     }
-    WaitForSingleObject(pi.hProcess, 120000);
+    WaitForSingleObject(pi.hProcess, 5000);
     DWORD exitCode = 1;
     GetExitCodeProcess(pi.hProcess, &exitCode);
     CloseHandle(pi.hProcess);
@@ -357,6 +757,11 @@ bool UserCodeHarness::InvokeCl(const UserHarnessConfig& config, const std::strin
 
     if (exitCode != 0) {
         log += "ERROR: cl.exe 退出码 " + std::to_string(exitCode) + "\n";
+        // 被测模型若在 DETACH 阶段死循环，其 DLL 无法卸载（仍被本进程占用），
+        // 链接器会报 LNK1104；这里给出可操作的提示，避免用户无从下手。
+        if (log.find("LNK1104") != std::string::npos)
+            log += "提示：输出 DLL 无法覆盖，通常是该型号的模块在卸载时卡死导致文件仍被占用，"
+                   "重启工具后即可重新编译。\n";
         return false;
     }
     std::wstring wOut = Utf8ToWide(outDll);
@@ -415,6 +820,17 @@ CompileResult UserCodeHarness::Compile(const UserHarnessConfig& config) {
         return result;
     }
 
+    // 所有测试项共用同一份对象生命周期代码：必须定义 MoModelType 与四个 Mo* 函数
+    if (config.userMainBody.find("MoModelType") == std::string::npos
+        || config.userMainBody.find("MoCreate") == std::string::npos
+        || config.userMainBody.find("MoInit") == std::string::npos
+        || config.userMainBody.find("MoStep") == std::string::npos
+        || config.userMainBody.find("MoDestroy") == std::string::npos) {
+        result.log =
+            "ERROR: 代码须定义 MoModelType、MoCreate、MoInit、MoStep、MoDestroy\n";
+        return result;
+    }
+
     m_enabledVars.clear();
     for (const auto& v : config.randomVars) {
         if (!v.enabled || v.name.empty()) continue;
@@ -429,6 +845,7 @@ CompileResult UserCodeHarness::Compile(const UserHarnessConfig& config) {
         }
         m_enabledVars.push_back(v);
     }
+    SetStepParams(config.stepCount, config.stepDt);
 
     m_dllSearchDirs.clear();
     std::set<std::string> seen;
@@ -502,18 +919,11 @@ bool UserCodeHarness::LoadCompiledDll(const std::string& dllPath, std::string& e
     Unload();
     ApplyDllSearchPaths();
 
-    int n = MultiByteToWideChar(CP_UTF8, 0, dllPath.c_str(), -1, nullptr, 0);
-    std::wstring wpath(n > 0 ? n - 1 : 0, L'\0');
-    if (n > 1) MultiByteToWideChar(CP_UTF8, 0, dllPath.c_str(), -1, &wpath[0], n);
-
-    m_hModule = LoadLibraryExW(wpath.c_str(), NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    std::string loadError;
+    // 加载私有副本且从不卸载：既保证每次都是全新的模块状态，又不会执行被测模块的 DETACH。
+    m_hModule = LoadPrivateModuleCopy(dllPath, std::string(), nullptr, &loadError);
     if (!m_hModule) {
-        // Retry with default search after SetDllDirectory
-        m_hModule = LoadLibraryW(wpath.c_str());
-    }
-    if (!m_hModule) {
-        err = "LoadLibrary 失败, GetLastError=" + std::to_string(GetLastError())
-            + "（请确认 models/ 下的第三方 .dll 存在；工具会尝试复制到 Harness 输出目录）\n";
+        err = loadError + "（请确认 models/ 下的第三方 .dll 存在；工具会尝试复制到 Harness 输出目录）\n";
         return false;
     }
     m_pfnRun = reinterpret_cast<FnRunUserTest>(GetProcAddress(m_hModule, "RunUserTest"));
@@ -530,10 +940,8 @@ bool UserCodeHarness::LoadCompiledDll(const std::string& dllPath, std::string& e
 }
 
 void UserCodeHarness::Unload() {
-    if (m_hModule) {
-        FreeLibrary(m_hModule);
-        m_hModule = NULL;
-    }
+    // 不调用 FreeLibrary：被测模块的 DETACH 可能死循环并永久占用装载锁（详见 LoadPrivateModuleCopy 注释）。
+    m_hModule = NULL;
     m_pfnRun = nullptr;
     m_pfnSetTraj = nullptr;
     m_pfnGetTrajCount = nullptr;
@@ -576,21 +984,27 @@ RandomValueBlob UserCodeHarness::Sample(uint32_t seed) const {
     return blob;
 }
 
-typedef int (*FnRunUserTestRaw)(const double*, int, const int*, int);
+typedef int (*FnRunUserTestRaw)(const double*, int, const int*, int, int, double);
 
-static int InvokeRunUserTestRaw(FnRunUserTestRaw fn, const double* d, int nd, const int* iv, int ni, DWORD* outExc) {
+static int InvokeRunUserTestRaw(FnRunUserTestRaw fn, const double* d, int nd, const int* iv, int ni,
+                                int stepCount, double dt, DWORD* outExc) {
     if (!fn) {
         if (outExc) *outExc = static_cast<DWORD>(-1);
         return 0;
     }
     __try {
         if (outExc) *outExc = 0;
-        return fn(d, nd, iv, ni);
+        return fn(d, nd, iv, ni, stepCount, dt);
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         if (outExc) *outExc = GetExceptionCode();
         return 0;
     }
+}
+
+void UserCodeHarness::SetStepParams(int stepCount, double stepDt) {
+    m_stepCount = stepCount > 0 ? stepCount : 1;
+    m_stepDt = stepDt > 0.0 ? stepDt : 0.02;
 }
 
 bool UserCodeHarness::RunOnce(const RandomValueBlob& values, int* outUserReturn, bool* outSeh, std::string& err) const {
@@ -605,6 +1019,7 @@ bool UserCodeHarness::RunOnce(const RandomValueBlob& values, int* outUserReturn,
         static_cast<int>(values.doubles.size()),
         values.ints.empty() ? nullptr : values.ints.data(),
         static_cast<int>(values.ints.size()),
+        m_stepCount, m_stepDt,
         &exc);
 
     if (exc != 0) {

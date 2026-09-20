@@ -9,23 +9,24 @@
 
 #include "UserCodeHarness.h"
 
+/** 判定容差默认值：型号未设置（0）时统一套用，避免多对象测试退化成“必须完全相等”。 */
+constexpr double kDefaultMultiObjectTolerance = 1e-8;
+
 /** Serializable snapshot of last UI / model-edit session. */
 struct SessionModelSnapshot {
     QString name;
     QString packageDir;
     QStringList headerPaths;
     QString userMainBody;
-    QString userMultiObjectBody;
     std::vector<RandomVarDef> randomVars;
     int instanceCount = 1;
     int multiObjectCount = 3;
     int multiObjectSteps = 100;
     double multiObjectDt = 0.02;
-    double multiObjectTolerance = 1e-8;
+    double multiObjectTolerance = kDefaultMultiObjectTolerance;
     int multiObjectSchedule = 0;
     QString status;
     QString lastUserHarnessDll;
-    QString lastMultiObjectHarnessDll;
 };
 
 struct SessionSnapshot {

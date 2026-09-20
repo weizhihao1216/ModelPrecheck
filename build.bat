@@ -47,7 +47,12 @@ if %ERRORLEVEL% neq 0 (
 
 echo.
 echo [3/4] Deploying Qt Runtime Dependencies...
-"%QT_DIR%\bin\windeployqt.exe" "%DIST_DIR%\ModelValidator.exe"
+"%QT_DIR%\bin\windeployqt.exe" --qmldir "%PROJECT_DIR%src\qml" "%DIST_DIR%\ModelValidator.exe"
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Qt runtime deployment failed!
+    pause
+    exit /b %ERRORLEVEL%
+)
 
 echo.
 echo [4/4] Copying environment prerequisites (VC++ / Build Tools)...

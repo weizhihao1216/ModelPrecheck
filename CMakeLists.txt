@@ -33,23 +33,22 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt5 COMPONENTS Widgets Charts PrintSupport REQUIRED)
-
-set(QSCINTILLA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/qscintilla-install")
-set(QSCINTILLA_INCLUDE_DIR "${QSCINTILLA_ROOT}/include")
-set(QSCINTILLA_LIBRARY "${QSCINTILLA_ROOT}/lib/qscintilla2_qt5.lib")
-if(NOT EXISTS "${QSCINTILLA_LIBRARY}")
-    message(FATAL_ERROR
-        "QScintilla static library not found at ${QSCINTILLA_LIBRARY}. "
-        "Build it first (see third_party/build_qscintilla.bat).")
-endif()
+find_package(Qt5 COMPONENTS
+    Widgets
+    Charts
+    PrintSupport
+    Qml
+    Quick
+    QuickControls2
+    QuickWidgets
+    REQUIRED
+)
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/core
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/utils
-    ${QSCINTILLA_INCLUDE_DIR}
 )
 
 set(SOURCES
@@ -90,24 +89,12 @@ set(SOURCES
     src/core/ReportGenerator.cpp
     src/core/PrecheckSummary.h
     src/core/PrecheckSummary.cpp
-    src/ui/LogConsoleWidget.h
-    src/ui/LogConsoleWidget.cpp
-    src/ui/ChartViewerWidget.h
-    src/ui/ChartViewerWidget.cpp
-    src/ui/TrajectoryViewWidget.h
-    src/ui/TrajectoryViewWidget.cpp
-    src/ui/CppCodeEditor.h
-    src/ui/CppCodeEditor.cpp
-    src/ui/CppCodeCompletion.h
-    src/ui/CppCodeCompletion.cpp
-    src/ui/BusyOverlayWidget.h
-    src/ui/BusyOverlayWidget.cpp
-    src/ui/SessionRestoreDialog.h
-    src/ui/SessionRestoreDialog.cpp
-    src/ui/PrecheckSummaryDialog.h
-    src/ui/PrecheckSummaryDialog.cpp
-    src/ui/MainWindow.h
-    src/ui/MainWindow.cpp
+    src/ui/CppSyntaxHighlighter.h
+    src/ui/CppSyntaxHighlighter.cpp
+    src/qml/QmlAppController.h
+    src/qml/QmlAppController.cpp
+    src/qml/QmlPrecheckRunner.h
+    src/qml/QmlPrecheckRunner.cpp
     src/resources.qrc
 )
 
@@ -116,8 +103,9 @@ add_executable(ModelValidator WIN32 ${SOURCES})
 target_link_libraries(ModelValidator PRIVATE
     Qt5::Widgets
     Qt5::Charts
-    Qt5::PrintSupport
-    "${QSCINTILLA_LIBRARY}"
+    Qt5::Qml
+    Qt5::Quick
+    Qt5::QuickControls2
     psapi.lib
 )
 
@@ -207,5 +195,3 @@ if(TARGET CompatibleWeaponG)
     install(FILES sample_models/CompatibleWeaponG/README.md
             DESTINATION sample_models/CompatibleWeaponG)
 endif()
-
-install(FILES src/ui/themestyle.qss DESTINATION .)

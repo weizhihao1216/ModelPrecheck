@@ -1,4 +1,5 @@
 #include "SehHelper.h"
+#include <atomic>
 #include <sstream>
 
 std::string SehCodeToString(DWORD code) {
@@ -186,4 +187,106 @@ bool SafeCallDestroyEx(FnModelDestroyEx fn, ModelHandle handle, DWORD* outExcept
         if (outExceptionCode) *outExceptionCode = GetExceptionCode();
         return false;
     }
+}
+
+namespace {
+
+std::atomic<bool> g_loadedPrivateModule(false);
+std::atomic<unsigned> g_privateCopySeq(0);
+
+std::wstring Utf8ToWidePath(const std::string& utf8) {
+    if (utf8.empty()) return std::wstring();
+    const int n = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, nullptr, 0);
+    if (n <= 1) return std::wstring();
+    std::wstring wide(static_cast<size_t>(n - 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, &wide[0], n);
+    return wide;
+}
+
+std::string DirectoryOfPath(const std::string& path) {
+    const size_t slash = path.find_last_of("\\/");
+    return slash == std::string::npos ? std::string() : path.substr(0, slash);
+}
+
+std::string FileStemOfPath(const std::string& path) {
+    const size_t slash = path.find_last_of("\\/");
+    const std::string name = (slash == std::string::npos) ? path : path.substr(slash + 1);
+    const size_t dot = name.find_last_of('.');
+    return dot == std::string::npos ? name : name.substr(0, dot);
+}
+
+/** 独立函数里用 SEH 兜住加载异常（带 C++ 对象的函数不能直接写 __try）。 */
+HMODULE LoadLibraryGuarded(const wchar_t* path) {
+    HMODULE module = nullptr;
+    __try {
+        module = LoadLibraryExW(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+        if (!module) module = LoadLibraryW(path);
+    } __except (FilterSehException(GetExceptionCode())) {
+        module = nullptr;
+    }
+    return module;
+}
+
+} // namespace
+
+HMODULE LoadPrivateModuleCopy(const std::string& sourcePath, const std::string& copyDir,
+                              std::string* outCopyPath, std::string* error) {
+    if (sourcePath.empty()) {
+        if (error) *error = "源 DLL 路径为空";
+        return nullptr;
+    }
+    const std::string dir = copyDir.empty() ? DirectoryOfPath(sourcePath) : copyDir;
+    const std::string stem = FileStemOfPath(sourcePath);
+    if (dir.empty() || stem.empty()) {
+        if (error) *error = "无法解析 DLL 路径：" + sourcePath;
+        return nullptr;
+    }
+
+    const std::string copyPath = dir + "\\" + stem + "__run"
+        + std::to_string(GetCurrentProcessId()) + "_"
+        + std::to_string(++g_privateCopySeq) + ".dll";
+    const std::wstring wSource = Utf8ToWidePath(sourcePath);
+    const std::wstring wCopy = Utf8ToWidePath(copyPath);
+    if (wSource.empty() || wCopy.empty() || !CopyFileW(wSource.c_str(), wCopy.c_str(), FALSE)) {
+        if (error) *error = "复制被测模块失败, GetLastError=" + std::to_string(GetLastError());
+        return nullptr;
+    }
+
+    HMODULE module = LoadLibraryGuarded(wCopy.c_str());
+    if (!module) {
+        // 没有加载成功，副本文件可以直接删掉，不必留到下次启动。
+        DeleteFileW(wCopy.c_str());
+        if (error) *error = "加载被测模块副本失败, GetLastError=" + std::to_string(GetLastError());
+        return nullptr;
+    }
+
+    g_loadedPrivateModule.store(true);
+    if (outCopyPath) *outCopyPath = copyPath;
+    return module;
+}
+
+bool HasLoadedPrivateModule() {
+    return g_loadedPrivateModule.load();
+}
+
+void CleanupPrivateModuleCopies(const std::string& modelsRootDir) {
+    if (modelsRootDir.empty()) return;
+    const std::string dirPattern = modelsRootDir + "\\*";
+    WIN32_FIND_DATAA dirData{};
+    HANDLE dirFind = FindFirstFileA(dirPattern.c_str(), &dirData);
+    if (dirFind == INVALID_HANDLE_VALUE) return;
+    do {
+        if ((dirData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) continue;
+        const std::string name = dirData.cFileName;
+        if (name == "." || name == "..") continue;
+        const std::string dir = modelsRootDir + "\\" + name;
+        WIN32_FIND_DATAA fileData{};
+        HANDLE fileFind = FindFirstFileA((dir + "\\*__run*.dll").c_str(), &fileData);
+        if (fileFind == INVALID_HANDLE_VALUE) continue;
+        do {
+            DeleteFileA((dir + "\\" + std::string(fileData.cFileName)).c_str());
+        } while (FindNextFileA(fileFind, &fileData));
+        FindClose(fileFind);
+    } while (FindNextFileA(dirFind, &dirData));
+    FindClose(dirFind);
 }

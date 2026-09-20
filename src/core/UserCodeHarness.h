@@ -27,8 +27,10 @@ struct UserHarnessConfig {
     std::vector<std::string> includeDirs;   // extra -I
     std::vector<std::string> libPaths;      // /LIBPATH
     std::vector<std::string> linkLibs;      // .lib file names or paths
-    std::string userMainBody;               // body of UserMain(const RandomBag& R)
+    std::string userMainBody;               // MoCreate / MoInit / MoStep / MoDestroy 定义
     std::vector<RandomVarDef> randomVars;
+    int stepCount = 100;                    // Harness 控制的推进步数（与多对象一致）
+    double stepDt = 0.02;                   // Harness 控制的步长（与多对象一致）
     std::string workDir;                    // generated sources / dll output
     std::string outputBaseName;             // base name for .cpp/.dll (default UserHarness)
 };
@@ -73,6 +75,11 @@ public:
     /** Restore enabled random vars after LoadCompiledDll (e.g. session restore). */
     void SetEnabledRandomVars(const std::vector<RandomVarDef>& vars);
 
+    /** 运行期步数/步长（与单线程多对象使用同一份设置；改动无需重新编译）。 */
+    void SetStepParams(int stepCount, double stepDt);
+    int StepCount() const { return m_stepCount; }
+    double StepDt() const { return m_stepDt; }
+
     // Sample random values according to enabled var defs (thread-safe if each call has own rng seed)
     RandomValueBlob Sample(uint32_t seed) const;
 
@@ -87,6 +94,13 @@ public:
     static std::string DefaultUserMainTemplate();
     static std::string FindVcVars64Bat();
 
+    /** 生成「单对象 + 多对象」合一的 Harness 源码：一份代码、一个 DLL、一次编译覆盖全部测试项。 */
+    static std::string GenerateUnifiedSource(const UserHarnessConfig& config,
+                                             const std::vector<RandomVarDef>& enabled);
+
+    /** 多对象：按 objectId 从打包数组解出每个对象自己的随机变量包（供各生成器复用）。 */
+    static std::string BuildPerObjectRandomPreamble(const std::vector<RandomVarDef>& enabled);
+
 private:
     std::string GenerateSource(const UserHarnessConfig& config, const std::vector<RandomVarDef>& enabled) const;
     bool InvokeCl(const UserHarnessConfig& config, const std::string& srcPath, const std::string& outDll, std::string& log) const;
@@ -98,8 +112,9 @@ private:
     std::vector<RandomVarDef> m_enabledVars;
     std::vector<std::string> m_dllSearchDirs;
 
-    // Export: int RunUserTest(const double* dvals, int nd, const int* ivals, int ni);
-    typedef int (*FnRunUserTest)(const double*, int, const int*, int);
+    // Export: int RunUserTest(const double* dvals, int nd, const int* ivals, int ni,
+    //                         int stepCount, double dt);
+    typedef int (*FnRunUserTest)(const double*, int, const int*, int, int, double);
     typedef void (*FnSetTrajectoryCapture)(int);
     typedef int (*FnGetTrajectoryCount)();
     typedef int (*FnGetTrajectoryPoint)(int, double*, double*);
@@ -108,6 +123,8 @@ private:
     FnSetTrajectoryCapture m_pfnSetTraj = nullptr;
     FnGetTrajectoryCount m_pfnGetTrajCount = nullptr;
     FnGetTrajectoryPoint m_pfnGetTrajPoint = nullptr;
+    int m_stepCount = 100;
+    double m_stepDt = 0.02;
 };
 
 #endif // USER_CODE_HARNESS_H

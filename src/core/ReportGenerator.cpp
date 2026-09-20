@@ -1,4 +1,4 @@
-﻿#include "ReportGenerator.h"
+#include "ReportGenerator.h"
 #include "PrecheckSummary.h"
 #include <fstream>
 #include <sstream>
@@ -8,34 +8,50 @@
 
 namespace {
 
-/** Shared CSS aligned with app UI (teal industrial dark). */
+/**
+ * 把 double 格式化成普通小数文本，避免报告里出现 1e-08 / 1.19e-09 这类科学计数法。
+ * 容差、位置偏差等小量级数值都用它显示；末尾多余的 0 会被去掉。
+ */
+std::string PlainDecimal(double value, int maxDecimals = 18) {
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(maxDecimals) << value;
+    std::string text = stream.str();
+    if (text.find('.') != std::string::npos) {
+        const size_t lastDigit = text.find_last_not_of('0');
+        text.erase(lastDigit == std::string::npos ? 0 : lastDigit + 1);
+        if (!text.empty() && text.back() == '.') text.pop_back();
+    }
+    return text.empty() ? std::string("0") : text;
+}
+
+/** Shared CSS aligned with app UI (light theme + teal accent). */
 const char* ReportThemeCss() {
     return
         "  body { font-family: 'Microsoft YaHei UI', 'Segoe UI', sans-serif; margin: 0; padding: 20px;"
-        "         background-color: #0f1419; color: #e2e8f0; }\n"
-        "  .container { max-width: 1100px; margin: 0 auto; background: #141c24; padding: 28px;"
-        "               border-radius: 10px; border: 1px solid #2d3f4f;"
-        "               box-shadow: 0 8px 24px rgba(0,0,0,0.45); }\n"
-        "  h1, h2, h3 { color: #14b8a6; border-bottom: 1px solid #2d3f4f; padding-bottom: 8px; }\n"
-        "  .muted { color: #94a3b8; font-weight: bold; }\n"
-        "  .badge { display: inline-block; padding: 6px 16px; border-radius: 16px; color: #0f1419;"
+        "         background-color: #f4f7fa; color: #14213d; }\n"
+        "  .container { max-width: 1100px; margin: 0 auto; background: #ffffff; padding: 28px;"
+        "               border-radius: 10px; border: 1px solid #dce4ec;"
+        "               box-shadow: 0 6px 18px rgba(20,33,61,0.08); }\n"
+        "  h1, h2, h3 { color: #0f766e; border-bottom: 1px solid #dce4ec; padding-bottom: 8px; }\n"
+        "  .muted { color: #60708a; font-weight: bold; }\n"
+        "  .badge { display: inline-block; padding: 6px 16px; border-radius: 16px; color: #ffffff;"
         "           font-weight: bold; font-size: 16px; text-align: center; }\n"
-        "  table { width: 100%; border-collapse: collapse; margin: 15px 0; background: #0f1419;"
-        "          border-radius: 8px; overflow: hidden; border: 1px solid #1e2a36; }\n"
-        "  th, td { padding: 11px 14px; text-align: left; border-bottom: 1px solid #1e2a36; }\n"
-        "  th { background-color: #1a242e; color: #14b8a6; font-weight: 600; }\n"
-        "  tr:hover { background-color: #1a242e; }\n"
-        "  .pass { color: #34d399; font-weight: bold; }\n"
-        "  .warn { color: #fbbf24; font-weight: bold; }\n"
-        "  .fail { color: #f87171; font-weight: bold; }\n"
-        "  .card { background: #1a242e; padding: 15px; border-radius: 8px; margin-bottom: 15px;"
-        "          border: 1px solid #2d3f4f; }\n"
-        "  .model-section { border: 1px solid #2d3f4f; border-radius: 10px; padding: 16px;"
-        "                   margin: 24px 0; background: #0f1419; }\n"
-        "  .log-box { background: #0c1218; padding: 12px; font-family: Consolas, monospace;"
+        "  table { width: 100%; border-collapse: collapse; margin: 15px 0; background: #ffffff;"
+        "          border-radius: 8px; overflow: hidden; border: 1px solid #dce4ec; }\n"
+        "  th, td { padding: 11px 14px; text-align: left; border-bottom: 1px solid #e4e9ef; }\n"
+        "  th { background-color: #e6f7f5; color: #0f766e; font-weight: 600; }\n"
+        "  tr:hover { background-color: #f4f9f8; }\n"
+        "  .pass { color: #169b62; font-weight: bold; }\n"
+        "  .warn { color: #b8791a; font-weight: bold; }\n"
+        "  .fail { color: #d94b55; font-weight: bold; }\n"
+        "  .card { background: #f8fafc; padding: 15px; border-radius: 8px; margin-bottom: 15px;"
+        "          border: 1px solid #dce4ec; }\n"
+        "  .model-section { border: 1px solid #dce4ec; border-radius: 10px; padding: 16px;"
+        "                   margin: 24px 0; background: #ffffff; }\n"
+        "  .log-box { background: #f1f5f9; padding: 12px; font-family: Consolas, monospace;"
         "             font-size: 13px; max-height: 280px; overflow-y: auto;"
-        "             border: 1px solid #2d3f4f; border-radius: 6px; color: #cbd5e1; }\n"
-        "  code { color: #2dd4bf; }\n";
+        "             border: 1px solid #dce4ec; border-radius: 6px; color: #3d4d60; }\n"
+        "  code { color: #0d9488; }\n";
 }
 
 } // namespace
@@ -43,7 +59,7 @@ const char* ReportThemeCss() {
 std::string ReportGenerator::GenerateHtml(const CombinedPrecheckReport& report) {
     std::stringstream html;
 
-    std::string badgeColor = "#64748b"; // gray = partial / not fully run
+    std::string badgeColor = "#60708a"; // gray = partial / not fully run
     std::string verdictText = "PARTIAL";
     const bool headerRanTop = !report.headerPath.empty();
     const bool libRanTop = !report.libPath.empty();
@@ -66,14 +82,14 @@ std::string ReportGenerator::GenerateHtml(const CombinedPrecheckReport& report) 
         if (report.multiThreadReport.verdict == "FAIL") anyFail = true;
         if (report.multiModelReport.verdict == "FAIL") anyFail = true;
         if (anyFail) {
-            badgeColor = "#f87171";
+            badgeColor = "#d94b55";
             verdictText = "FAIL";
         } else {
-            badgeColor = "#34d399";
+            badgeColor = "#169b62";
             verdictText = "PASS";
         }
         if (perfRanTop && report.perfReport.realtimeVerdict == "WARNING" && verdictText != "FAIL") {
-            badgeColor = "#fbbf24";
+            badgeColor = "#e39a16";
             verdictText = "WARNING";
         }
     } else {
@@ -299,12 +315,15 @@ std::string ReportGenerator::GenerateHtml(const CombinedPrecheckReport& report) 
     } else {
         html << "    <p><b>对象数/步数:</b> " << report.multiObjectReport.objectCount
              << " / " << report.multiObjectReport.stepCount << "</p>\n"
-             << "    <p><b>最大位置偏差:</b> " << report.multiObjectReport.maxPositionDeviation
-             << "（容差 " << report.multiObjectReport.tolerance << "）</p>\n"
+             << "    <p><b>最大位置偏差:</b> "
+             << PlainDecimal(report.multiObjectReport.maxPositionDeviation)
+             << "（容差 " << PlainDecimal(report.multiObjectReport.tolerance) << "）</p>\n"
              << "    <p><b>异常/状态串扰:</b> " << report.multiObjectReport.exceptionCount
              << " / " << report.multiObjectReport.interferenceCount << "</p>\n"
-             << "    <p><b>最大单帧耗时:</b> " << report.multiObjectReport.maxFrameTimeMs
-             << " ms | <b>内存变化:</b> " << report.multiObjectReport.memoryDeltaMB << " MB</p>\n"
+             << "    <p><b>最大单帧耗时:</b> "
+             << PlainDecimal(report.multiObjectReport.maxFrameTimeMs)
+             << " ms | <b>内存变化:</b> "
+             << PlainDecimal(report.multiObjectReport.memoryDeltaMB) << " MB</p>\n"
              << "    <p class=\"" << (report.multiObjectReport.verdict == "PASS" ? "pass" : "fail")
              << "\">" << report.multiObjectReport.verdict << " — "
              << report.multiObjectReport.summary << "</p>\n";
@@ -353,7 +372,7 @@ bool ReportGenerator::SaveReportToFile(const CombinedPrecheckReport& report, con
 std::string ReportGenerator::GenerateDualBuildHtml(const DualBuildPrecheckReport& dualReport) {
     std::stringstream html;
 
-    std::string badgeColor = dualReport.overallPass ? "#34d399" : "#f87171";
+    std::string badgeColor = dualReport.overallPass ? "#169b62" : "#d94b55";
     std::string verdictText = dualReport.overallPass ? "PASS" : "FAIL";
 
     html << "<!DOCTYPE html>\n<html>\n<head>\n"
@@ -550,7 +569,7 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
     if (multiObjectRan && multiObjectPassed < multiObjectTested) anyFail = true;
     if (!fleetReport.overallPass && peRan) anyFail = true;
 
-    std::string badgeColor = anyFail ? "#f87171" : (packageRan || perfRan || multiModelRan || multiThreadRan || multiObjectRan ? "#34d399" : "#64748b");
+    std::string badgeColor = anyFail ? "#d94b55" : (packageRan || perfRan || multiModelRan || multiThreadRan || multiObjectRan ? "#169b62" : "#60708a");
     std::string verdictText = anyFail ? "FAIL" : (packageRan || perfRan || multiModelRan || multiThreadRan || multiObjectRan ? "PASS" : "N/A");
 
     auto statusCell = [](bool ran, bool pass) -> std::string {
@@ -915,10 +934,10 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
         } else {
             const auto& report = model.report;
             html << "    <p>对象数: " << report.objectCount << " | 步数: " << report.stepCount
-                 << " | 最大偏差: " << report.maxPositionDeviation
-                 << " | 容差: " << report.tolerance
-                 << " | 最大单帧: " << report.maxFrameTimeMs << " ms"
-                 << " | 内存变化: " << report.memoryDeltaMB << " MB</p>\n"
+                 << " | 最大偏差: " << PlainDecimal(report.maxPositionDeviation)
+                 << " | 容差: " << PlainDecimal(report.tolerance)
+                 << " | 最大单帧: " << PlainDecimal(report.maxFrameTimeMs) << " ms"
+                 << " | 内存变化: " << PlainDecimal(report.memoryDeltaMB) << " MB</p>\n"
                  << "    <p class=\"" << (report.verdict == "PASS" ? "pass" : "fail")
                  << "\">" << report.verdict << " — " << report.summary << "</p>\n"
                  << "    <table><tr><th>对象</th><th>基线点</th><th>交错点</th>"
@@ -927,7 +946,7 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
                 html << "    <tr><td>Object #" << object.objectId << "</td><td>"
                      << object.baselineTrajectory.size() << "</td><td>"
                      << object.interleavedTrajectory.size() << "</td><td>"
-                     << object.maxPositionDeviation << "</td><td>"
+                     << PlainDecimal(object.maxPositionDeviation) << "</td><td>"
                      << object.baselineReturnCode << " / " << object.interleavedReturnCode
                      << "</td><td class=\"" << (object.exceptionOccurred ? "fail" : "pass")
                      << "\">" << (object.exceptionOccurred
@@ -951,10 +970,10 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
             html << "  <div class=\"card\"><p>型号数: " << fleetMo.modelCount
                  << " | 对象总数: " << fleetMo.totalObjectCount
                  << " | 步数: " << fleetMo.stepCount
-                 << " | 最大偏差: " << fleetMo.maxPositionDeviation
-                 << " | 容差: " << fleetMo.tolerance
-                 << " | 最大单帧: " << fleetMo.maxFrameTimeMs << " ms"
-                 << " | 内存变化: " << fleetMo.memoryDeltaMB << " MB</p>\n"
+                 << " | 最大偏差: " << PlainDecimal(fleetMo.maxPositionDeviation)
+                 << " | 容差: " << PlainDecimal(fleetMo.tolerance)
+                 << " | 最大单帧: " << PlainDecimal(fleetMo.maxFrameTimeMs) << " ms"
+                 << " | 内存变化: " << PlainDecimal(fleetMo.memoryDeltaMB) << " MB</p>\n"
                  << "  <p class=\"" << (fleetMo.verdict == "PASS" ? "pass" : "fail")
                  << "\">" << fleetMo.verdict << " — " << fleetMo.summary << "</p>\n"
                  << "  <table><tr><th>全局对象</th><th>型号</th><th>局部对象</th>"
@@ -966,7 +985,7 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
                      << object.modelName << "</td><td>#" << object.localObjectId
                      << "</td><td>" << d.baselineTrajectory.size() << "</td><td>"
                      << d.interleavedTrajectory.size() << "</td><td>"
-                     << d.maxPositionDeviation << "</td><td>"
+                     << PlainDecimal(d.maxPositionDeviation) << "</td><td>"
                      << d.baselineReturnCode << " / " << d.interleavedReturnCode
                      << "</td><td>" << d.detail << "</td></tr>\n";
             }

@@ -1,6 +1,16 @@
 <!DOCTYPE RCC><RCC version="1.0">
 <qresource prefix="/">
-    <file>ui/themestyle.qss</file>
-    <file>ui/check_blue.xpm</file>
+    <file>qml/AppButton.qml</file>
+    <file>qml/AppComboBox.qml</file>
+    <file>qml/AppSpinBox.qml</file>
+    <file>qml/AppTextField.qml</file>
+    <file>qml/AppToleranceField.qml</file>
+    <file>qml/BusyOverlay.qml</file>
+    <file>qml/Main.qml</file>
+    <file>qml/NumberFormat.js</file>
+    <file>qml/ObjectResultPanel.qml</file>
+    <file>qml/PopupCloseButton.qml</file>
+    <file>qml/PopupHeader.qml</file>
+    <file>qml/TrajectoryTable.qml</file>
 </qresource>
 </RCC>
