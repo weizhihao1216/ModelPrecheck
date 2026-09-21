@@ -63,29 +63,26 @@ QIcon BuildAppIcon() {
     return icon;
 }
 
-// 参考逻辑尺寸：本机（1920x1080 @125% 缩放，去掉任务栏后 1536x824 逻辑像素）下布局正常，
-// 因此把“逻辑可用空间不小于 1536x824”作为布局基准。
-constexpr int kReferenceLogicalWidth = 1536;
-constexpr int kReferenceLogicalHeight = 824;
-
-// 界面元素的有效缩放上限：本机 1920x1080 @125% 时元素与文字的物理大小（观感基准）。
-// 系统缩放高于它时（如 2560x1600 @150%）按比例缩小，保证不同机器上控件与文字的
-// 物理大小一致，布局与本机保持一致。
-constexpr qreal kMaxEffectiveScale = 1.25;
+// 布局设计基准逻辑尺寸：界面在 1920x1040 逻辑像素（即 1080p 屏幕不缩放时的可用区域）
+// 下呈现设计比例——顶部 64px 头部、左侧 210px 导航、右侧 238/450px 两列，中间代码框
+// 仍有约 1150px 宽，能完整显示对象代码模板并留出空白。
+constexpr int kDesignLogicalWidth = 1920;
+constexpr int kDesignLogicalHeight = 1040;
 
 /**
- * 反算全局缩放系数，使界面在不同分辨率/缩放下都与本机（1920x1080 @125%）观感一致。
+ * 反算全局缩放系数，使界面在不同分辨率/缩放下都保持设计基准下的布局比例。
  *
- * 两个约束：
- * 1) 元素有效缩放不超过 kMaxEffectiveScale —— 2560x1600 @150% 时若不做处理，
- *    元素会比本机大 20%，界面显得“整体很大”；
- * 2) 逻辑可用空间不小于基准尺寸 —— 2560x1600 @200% 这类情况下逻辑空间只有约
- *    1280x770，窗口会被压小导致内容被挤掉/截断。
+ * Qt 的屏幕缩放 = “系统缩放取整后的值”（Windows 下为整数缩放策略，150% → 2.0），
+ * QT_SCALE_FACTOR 则在其上相乘（实测 150% 系统缩放 + 0.833 → dpr 1.666）。
+ * 因此要让逻辑可用空间达到设计基准，系数取：
  *
- * 结果通过 QT_SCALE_FACTOR 交给 Qt；本机反算结果是 1.0，不改变现有布局。
+ *     系数 = min(物理宽 / 1920, 物理可用高 / 1040) / 系统缩放取整值
+ *
+ * 上限 1.0：屏幕足够大时不再放大（逻辑空间更大、布局更宽松）；下限 0.6：屏幕过小时
+ * 避免文字小到看不清。结果通过 QT_SCALE_FACTOR 交给 Qt。
  *
  * 注意：必须在 QApplication 之前调用。此时本进程尚未做 DPI 感知，
- * Win32 返回的屏幕尺寸就是缩放后的逻辑尺寸（与 Qt 的坐标系一致）。
+ * Win32 返回的屏幕尺寸就是缩放后的逻辑尺寸。
  */
 qreal CalculateGlobalScaleFactor() {
     RECT work{};
@@ -94,7 +91,8 @@ qreal CalculateGlobalScaleFactor() {
     const double height = work.bottom - work.top;
     if (width <= 0.0 || height <= 0.0) return 1.0;
 
-    // 系统缩放 = 真实分辨率 / 逻辑分辨率
+    // 系统缩放 = 真实分辨率 / 逻辑分辨率。按整数除法会得到 1.4997 这类值，
+    // 先吸附到 Windows 的 25% 档位（100/125/150/175/200%），再按 Qt 的整数缩放策略取整。
     qreal osScale = 1.0;
     const int logicalWidth = GetSystemMetrics(SM_CXSCREEN);
     DEVMODEW mode{};
@@ -102,13 +100,16 @@ qreal CalculateGlobalScaleFactor() {
     if (logicalWidth > 0 && EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode)
         && mode.dmPelsWidth > 0) {
         osScale = static_cast<qreal>(mode.dmPelsWidth) / logicalWidth;
+        osScale = qRound(osScale * 4.0) / 4.0;
     }
 
-    const qreal byScale = kMaxEffectiveScale / osScale;
-    const qreal byWidth = static_cast<qreal>(width / kReferenceLogicalWidth);
-    const qreal byHeight = static_cast<qreal>(height / kReferenceLogicalHeight);
-    // 上限 1.0：够大就不放大，保持现有布局；下限 0.6：屏幕太小时避免小到看不清。
-    return qBound<qreal>(0.6, qMin<qreal>(1.0, qMin(byScale, qMin(byWidth, byHeight))), 1.0);
+    // Qt 侧实际生效的基准缩放（系统缩放按 Round 策略取整；150% → 2.0）。
+    const qreal qtBaseScale = qMax<qreal>(1.0, qRound(osScale));
+    const qreal physicalWorkHeight = height * osScale;
+    const qreal byWidth = static_cast<qreal>(mode.dmPelsWidth) / kDesignLogicalWidth;
+    const qreal byHeight = static_cast<qreal>(physicalWorkHeight / kDesignLogicalHeight);
+    const qreal result = qBound<qreal>(0.6, qMin(byWidth, byHeight) / qtBaseScale, 1.0);
+    return result;
 }
 
 } // namespace

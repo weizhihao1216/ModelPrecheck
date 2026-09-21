@@ -29,7 +29,7 @@ const char* ReportThemeCss() {
     return
         "  body { font-family: 'Microsoft YaHei UI', 'Segoe UI', sans-serif; margin: 0; padding: 20px;"
         "         background-color: #f4f7fa; color: #14213d; }\n"
-        "  .container { max-width: 1100px; margin: 0 auto; background: #ffffff; padding: 28px;"
+        "  .container { max-width: 1320px; margin: 0 auto; background: #ffffff; padding: 28px;"
         "               border-radius: 10px; border: 1px solid #dce4ec;"
         "               box-shadow: 0 6px 18px rgba(20,33,61,0.08); }\n"
         "  h1, h2, h3 { color: #0f766e; border-bottom: 1px solid #dce4ec; padding-bottom: 8px; }\n"
@@ -38,8 +38,16 @@ const char* ReportThemeCss() {
         "           font-weight: bold; font-size: 16px; text-align: center; }\n"
         "  table { width: 100%; border-collapse: collapse; margin: 15px 0; background: #ffffff;"
         "          border-radius: 8px; overflow: hidden; border: 1px solid #dce4ec; }\n"
-        "  th, td { padding: 11px 14px; text-align: left; border-bottom: 1px solid #e4e9ef; }\n"
-        "  th { background-color: #e6f7f5; color: #0f766e; font-weight: 600; }\n"
+        // 单元格内容必须可断行：文件路径、超长符号名是不含空格的连续串，
+        // 默认不换行会把整张表撑得比容器还宽（被 overflow:hidden 裁掉、文字看不清）。
+        "  th, td { padding: 11px 14px; text-align: left; border-bottom: 1px solid #e4e9ef;"
+        "           vertical-align: top; overflow-wrap: anywhere; }\n"
+        // 表头不允许换行：中文表头本身可断行，列宽会一路塌到只剩一个字宽，
+        // 「型号」「级别」这类短列就被压成竖排文字。用表头的自然宽度兜住列宽下限。
+        "  th { background-color: #e6f7f5; color: #0f766e; font-weight: 600; white-space: nowrap; }\n"
+        "  .nowrap { white-space: nowrap; }\n"
+        // 路径按任意字符断行，否则一长串目录会独占整行、把其它列挤没。
+        "  td code { word-break: break-all; }\n"
         "  tr:hover { background-color: #f4f9f8; }\n"
         "  .pass { color: #169b62; font-weight: bold; }\n"
         "  .warn { color: #b8791a; font-weight: bold; }\n"
@@ -759,9 +767,11 @@ std::string ReportGenerator::GenerateFleetHtml(const FleetSessionReport& fleetRe
             if (i) files += "<br>";
             files += issue.files[i];
         }
-        html << "  <tr><td>跨型号/包级</td><td>" << issue.category
+        // 型号/级别是固定短标签，限制换行才能保持一列一个词；
+        // 涉及文件与说明两列承担换行，避免被这两列挤压成竖排文字。
+        html << "  <tr><td class=\"nowrap\">跨型号/包级</td><td>" << issue.category
              << "</td><td class=\"" << (issue.severity == "FAIL" ? "fail" : "warn")
-             << "\">" << issue.severity << "</td><td>" << issue.symbol
+             << " nowrap\">" << issue.severity << "</td><td>" << issue.symbol
              << "</td><td><code>" << files << "</code></td><td>" << issue.detail
              << "</td></tr>\n";
         ++conflictRows;

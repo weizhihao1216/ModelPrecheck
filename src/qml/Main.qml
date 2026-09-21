@@ -12,6 +12,9 @@ ApplicationWindow {
     height: 900
     minimumWidth: 1180
     minimumHeight: 720
+    // 启动即铺满可用桌面：设计基准（逻辑可用区 ≥1920x1040）下代码框才能完整显示
+    // 对象代码模板并保留右侧/下方留白；窄逻辑宽度下会被缩放策略自动收窄。
+    visibility: Window.Maximized
     title: qsTr("第三方武器模型集成预检")
     color: "#f4f7fa"
 
@@ -2196,7 +2199,11 @@ ApplicationWindow {
                 spacing: 16
 
                 Rectangle {
-                    Layout.preferredWidth: window.width < 1400 ? 196 : 238
+                    // 逻辑宽度不足设计基准(1920)时按比例收窄，把宽度让给中间的代码框，
+                    // 保证代码框右侧仍有留白、长行不出现横向滚动条。
+                    Layout.preferredWidth: window.width < 1400
+                                           ? 196
+                                           : Math.min(238, Math.max(200, window.width * 0.13))
                     Layout.fillHeight: true
                     radius: 9
                     color: "white"
@@ -2804,7 +2811,9 @@ ApplicationWindow {
 
                 Rectangle {
                     // 小窗口下收窄本列，把宽度让给中间的代码输入框。
-                    Layout.preferredWidth: window.width < 1400 ? 360 : 450
+                    Layout.preferredWidth: window.width < 1400
+                                           ? 360
+                                           : Math.min(450, Math.max(340, window.width * 0.24))
                     Layout.fillHeight: true
                     radius: 9
                     color: "white"
